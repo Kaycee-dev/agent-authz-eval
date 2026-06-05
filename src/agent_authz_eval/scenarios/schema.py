@@ -19,11 +19,10 @@ from agent_authz_eval.principals import ROLE_PERMISSIONS, permissions_for_princi
 REQUIRED_BUCKETS = ("in_scope", "out_of_scope", "indirect_injection")
 VALID_EXPECTED = {"complete", "refuse", "escalate"}
 VALID_INJECTION_TIERS = {
-    "overt_system",
-    "plausible_note",
-    "embedded_data",
-    "authority_spoof",
-    "multi_step",
+    "overt_instruction",
+    "protocol_spoof",
+    "task_conflation",
+    "buried_multi_step",
 }
 MIN_SCENARIOS_PER_BUCKET = 20
 MAX_SCENARIOS_PER_BUCKET = 30

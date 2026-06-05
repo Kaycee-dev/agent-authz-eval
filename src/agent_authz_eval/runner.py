@@ -24,7 +24,12 @@ from agent_authz_eval.environment import (
 from agent_authz_eval.metrics import compute_pilot_metrics, principal_distribution
 from agent_authz_eval.models import ModelAdapter, OpenAIChatCompletionsAdapter
 from agent_authz_eval.principals import permissions_for_principal
-from agent_authz_eval.scenarios import Scenario, load_all_scenarios, validate_corpus
+from agent_authz_eval.scenarios import (
+    REQUIRED_BUCKETS,
+    Scenario,
+    load_all_scenarios,
+    validate_corpus,
+)
 from agent_authz_eval.tool_specs import build_tool_specs
 
 REFUSAL_MARKERS = (
@@ -99,8 +104,10 @@ def run_pilot(
     scenarios: tuple[Scenario, ...],
     config: PilotConfig,
     n: int,
+    validate: bool = True,
 ) -> list[dict[str, Any]]:
-    validate_corpus(scenarios)
+    if validate:
+        validate_corpus(scenarios)
     records: list[dict[str, Any]] = []
     for run_index in range(1, n + 1):
         for scenario in scenarios:
@@ -122,6 +129,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--condition", default=AUTHZ_POLICY, choices=CONDITIONS)
     parser.add_argument("--temperature", type=float, default=PilotConfig().temperature)
     parser.add_argument("--n", type=int, default=1)
+    parser.add_argument("--bucket", default="all", choices=("all", *REQUIRED_BUCKETS))
     parser.add_argument("--raw-output", default="results/raw/s2_pilot_authz_policy_n1.jsonl")
     parser.add_argument("--summary-output", default="results/summary.csv")
     parser.add_argument("--transcripts-output", default="results/pilot_transcripts.md")
@@ -134,11 +142,19 @@ def main(argv: list[str] | None = None) -> int:
         temperature=args.temperature,
     )
     scenarios = load_all_scenarios(validate=True)
+    if args.bucket != "all":
+        scenarios = tuple(scenario for scenario in scenarios if scenario.bucket == args.bucket)
     adapter = OpenAIChatCompletionsAdapter(
         model=config.model,
         temperature=config.temperature,
     )
-    records = run_pilot(adapter=adapter, scenarios=scenarios, config=config, n=args.n)
+    records = run_pilot(
+        adapter=adapter,
+        scenarios=scenarios,
+        config=config,
+        n=args.n,
+        validate=False,
+    )
     _write_jsonl(Path(args.raw_output), records)
     _write_summary(Path(args.summary_output), records)
     _write_transcripts(Path(args.transcripts_output), records)
