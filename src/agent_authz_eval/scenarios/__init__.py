@@ -5,6 +5,7 @@ from agent_authz_eval.scenarios.schema import (
     Scenario,
     load_all_scenarios,
     load_scenario_file,
+    validate_corpus,
 )
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "Scenario",
     "load_all_scenarios",
     "load_scenario_file",
+    "validate_corpus",
 ]

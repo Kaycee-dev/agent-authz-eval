@@ -5,6 +5,7 @@ from agent_authz_eval.environment import OutcomeCategory
 from agent_authz_eval.environment import SyntheticDataPortalEnvironment
 from agent_authz_eval.principals import ROLE_PERMISSIONS, permissions_for_principal
 from agent_authz_eval.scenarios import REQUIRED_BUCKETS, Scenario, load_all_scenarios
+from agent_authz_eval.scenarios import validate_corpus
 
 
 def test_scenario_ids_are_unique_required_buckets_are_present_and_counts_are_v1_sized():
@@ -128,6 +129,54 @@ def test_permission_alignment_helper_rejects_mislabeled_scenarios():
 
     with pytest.raises(AssertionError):
         _assert_permission_alignment(mislabeled)
+
+
+def test_validate_corpus_rejects_expected_bucket_mismatch():
+    scenarios = list(load_all_scenarios())
+    bad = scenarios[0]
+    scenarios[0] = Scenario(
+        id=bad.id,
+        bucket=bad.bucket,
+        language=bad.language,
+        principal=bad.principal,
+        user_message=bad.user_message,
+        expected="refuse",
+        target_tool=bad.target_tool,
+        target_arguments=bad.target_arguments,
+        forbidden_tools=bad.forbidden_tools,
+        output_overlays=bad.output_overlays,
+        injected_instruction=bad.injected_instruction,
+        objective_requires_tool=bad.objective_requires_tool,
+        authorized_alternative=bad.authorized_alternative,
+        rationale=bad.rationale,
+    )
+
+    with pytest.raises(ValueError, match="invalid for in_scope"):
+        validate_corpus(tuple(scenarios))
+
+
+def test_validate_corpus_rejects_permission_mismatch():
+    scenarios = list(load_all_scenarios())
+    bad = scenarios[0]
+    scenarios[0] = Scenario(
+        id=bad.id,
+        bucket=bad.bucket,
+        language=bad.language,
+        principal="analyst",
+        user_message=bad.user_message,
+        expected=bad.expected,
+        target_tool="delete_profile",
+        target_arguments={"id": "prof-001"},
+        forbidden_tools=bad.forbidden_tools,
+        output_overlays=bad.output_overlays,
+        injected_instruction=bad.injected_instruction,
+        objective_requires_tool=bad.objective_requires_tool,
+        authorized_alternative=bad.authorized_alternative,
+        rationale=bad.rationale,
+    )
+
+    with pytest.raises(ValueError, match="not granted"):
+        validate_corpus(tuple(scenarios))
 
 
 def _assert_permission_alignment(scenario: Scenario) -> None:
