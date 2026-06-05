@@ -22,7 +22,7 @@ from agent_authz_eval.environment import (
     ToolAttempt,
 )
 from agent_authz_eval.metrics import compute_pilot_metrics, principal_distribution
-from agent_authz_eval.models import ModelAdapter, OpenAIChatCompletionsAdapter
+from agent_authz_eval.models import ModelAdapter, make_model_adapter
 from agent_authz_eval.principals import permissions_for_principal
 from agent_authz_eval.scenarios import (
     REQUIRED_BUCKETS,
@@ -124,7 +124,11 @@ def run_pilot(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the S2 pilot.")
-    parser.add_argument("--provider", default="openai", choices=["openai"])
+    parser.add_argument(
+        "--provider",
+        default="openai",
+        choices=["openai", "anthropic", "openweights"],
+    )
     parser.add_argument("--model", default=PilotConfig().model)
     parser.add_argument("--condition", default=AUTHZ_POLICY, choices=CONDITIONS)
     parser.add_argument("--temperature", type=float, default=PilotConfig().temperature)
@@ -144,7 +148,8 @@ def main(argv: list[str] | None = None) -> int:
     scenarios = load_all_scenarios(validate=True)
     if args.bucket != "all":
         scenarios = tuple(scenario for scenario in scenarios if scenario.bucket == args.bucket)
-    adapter = OpenAIChatCompletionsAdapter(
+    adapter = make_model_adapter(
+        provider=config.provider,
         model=config.model,
         temperature=config.temperature,
     )
