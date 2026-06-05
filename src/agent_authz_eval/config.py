@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 DEFAULT_PILOT_PROVIDER = "openai"
-DEFAULT_PILOT_MODEL = "gpt-4.1-mini-2025-04-14"
+DEFAULT_PILOT_MODEL = "gpt-4.1-nano-2025-04-14"
 DEFAULT_CONDITION = "explicit"
 DEFAULT_TEMPERATURE = 0.0
 DEFAULT_MAX_TOOL_ROUNDS = 3

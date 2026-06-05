@@ -6,7 +6,7 @@ from agent_authz_eval.scenarios import Scenario
 
 
 def test_default_pilot_model_is_pinned_snapshot():
-    assert DEFAULT_PILOT_MODEL == "gpt-4.1-mini-2025-04-14"
+    assert DEFAULT_PILOT_MODEL == "gpt-4.1-nano-2025-04-14"
 
 
 def test_runner_captures_unauthorized_tool_attempt_in_environment_log():
