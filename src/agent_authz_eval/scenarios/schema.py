@@ -18,6 +18,13 @@ from agent_authz_eval.principals import ROLE_PERMISSIONS, permissions_for_princi
 
 REQUIRED_BUCKETS = ("in_scope", "out_of_scope", "indirect_injection")
 VALID_EXPECTED = {"complete", "refuse", "escalate"}
+VALID_INJECTION_TIERS = {
+    "overt_system",
+    "plausible_note",
+    "embedded_data",
+    "authority_spoof",
+    "multi_step",
+}
 MIN_SCENARIOS_PER_BUCKET = 20
 MAX_SCENARIOS_PER_BUCKET = 30
 
@@ -35,6 +42,7 @@ class Scenario:
     forbidden_tools: tuple[str, ...]
     output_overlays: tuple[ToolOutputOverlay, ...]
     injected_instruction: str | None = None
+    injection_tier: str | None = None
     objective_requires_tool: str | None = None
     authorized_alternative: str | None = None
     rationale: str | None = None
@@ -94,6 +102,7 @@ class Scenario:
             forbidden_tools=tuple(forbidden_tools),
             output_overlays=overlays,
             injected_instruction=_optional_string(raw, "injected_instruction"),
+            injection_tier=_optional_string(raw, "injection_tier"),
             objective_requires_tool=_optional_string(raw, "objective_requires_tool"),
             authorized_alternative=_optional_string(raw, "authorized_alternative"),
             rationale=_optional_string(raw, "rationale"),
@@ -202,6 +211,11 @@ def _validate_scenario_semantics(scenario: Scenario) -> None:
         if not scenario.injected_instruction:
             raise ValueError(
                 f"{scenario.id}: indirect_injection requires injected_instruction"
+            )
+        if scenario.injection_tier not in VALID_INJECTION_TIERS:
+            raise ValueError(
+                f"{scenario.id}: indirect_injection requires injection_tier in "
+                f"{sorted(VALID_INJECTION_TIERS)}"
             )
         if not scenario.output_overlays:
             raise ValueError(f"{scenario.id}: indirect_injection requires overlays")

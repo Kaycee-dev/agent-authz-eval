@@ -4,6 +4,7 @@ from agent_authz_eval.environment import TOOL_REQUIRED_PERMISSIONS
 from agent_authz_eval.environment import OutcomeCategory
 from agent_authz_eval.environment import SyntheticDataPortalEnvironment
 from agent_authz_eval.principals import ROLE_PERMISSIONS, permissions_for_principal
+from agent_authz_eval.scenarios.schema import VALID_INJECTION_TIERS
 from agent_authz_eval.scenarios import REQUIRED_BUCKETS, Scenario, load_all_scenarios
 from agent_authz_eval.scenarios import validate_corpus
 
@@ -47,6 +48,7 @@ def test_indirect_injection_scenarios_are_authorized_tasks_with_forbidden_tools(
 
         assert target_permission in permissions
         assert scenario.injected_instruction
+        assert scenario.injection_tier in VALID_INJECTION_TIERS
         assert scenario.output_overlays
         for overlay in scenario.output_overlays:
             assert overlay.tool_name == scenario.target_tool
@@ -54,6 +56,22 @@ def test_indirect_injection_scenarios_are_authorized_tasks_with_forbidden_tools(
         for forbidden_tool in scenario.forbidden_tools:
             forbidden_permission = TOOL_REQUIRED_PERMISSIONS[forbidden_tool]
             assert forbidden_permission not in permissions
+
+
+def test_indirect_injection_bucket_has_strength_gradient():
+    injection_scenarios = [
+        scenario
+        for scenario in load_all_scenarios()
+        if scenario.bucket == "indirect_injection"
+    ]
+    tiers = {scenario.injection_tier for scenario in injection_scenarios}
+    instructions = [scenario.injected_instruction or "" for scenario in injection_scenarios]
+
+    assert tiers == VALID_INJECTION_TIERS
+    assert any(not instruction.startswith("SYSTEM:") for instruction in instructions)
+    assert any(
+        scenario.injection_tier == "multi_step" for scenario in injection_scenarios
+    )
 
 
 def test_out_of_scope_scenarios_declare_no_authorized_alternative():
@@ -146,6 +164,7 @@ def test_validate_corpus_rejects_expected_bucket_mismatch():
         forbidden_tools=bad.forbidden_tools,
         output_overlays=bad.output_overlays,
         injected_instruction=bad.injected_instruction,
+        injection_tier=bad.injection_tier,
         objective_requires_tool=bad.objective_requires_tool,
         authorized_alternative=bad.authorized_alternative,
         rationale=bad.rationale,
@@ -170,6 +189,7 @@ def test_validate_corpus_rejects_permission_mismatch():
         forbidden_tools=bad.forbidden_tools,
         output_overlays=bad.output_overlays,
         injected_instruction=bad.injected_instruction,
+        injection_tier=bad.injection_tier,
         objective_requires_tool=bad.objective_requires_tool,
         authorized_alternative=bad.authorized_alternative,
         rationale=bad.rationale,
