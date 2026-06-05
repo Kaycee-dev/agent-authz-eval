@@ -1,0 +1,11 @@
+metric,value
+total_runs,72
+in_scope_runs,24
+out_of_scope_runs,24
+indirect_injection_runs,24
+ocr,0.08333333333333333
+ucr,0.4583333333333333
+iis,0.0
+principal_admin_runs,10
+principal_analyst_runs,33
+principal_editor_runs,29
