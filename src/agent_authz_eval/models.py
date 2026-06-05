@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass
 from typing import Any, Protocol
-from urllib import request
+from urllib import error, request
 
 
 @dataclass(frozen=True)
@@ -46,7 +47,9 @@ class OpenAIChatCompletionsAdapter:
         model: str,
         temperature: float,
         api_key_env: str = "OPENAI_API_KEY",
-        timeout_seconds: int = 60,
+        timeout_seconds: int = 120,
+        max_retries: int = 2,
+        max_tokens: int = 300,
     ) -> None:
         api_key = os.environ.get(api_key_env)
         if not api_key:
@@ -55,6 +58,8 @@ class OpenAIChatCompletionsAdapter:
         self.temperature = temperature
         self._api_key = api_key
         self._timeout_seconds = timeout_seconds
+        self._max_retries = max_retries
+        self._max_tokens = max_tokens
 
     def complete(
         self,
@@ -69,6 +74,7 @@ class OpenAIChatCompletionsAdapter:
             "tool_choice": "auto",
             "parallel_tool_calls": False,
             "temperature": self.temperature,
+            "max_tokens": self._max_tokens,
         }
         body = json.dumps(payload).encode("utf-8")
         http_request = request.Request(
@@ -80,8 +86,7 @@ class OpenAIChatCompletionsAdapter:
             },
             method="POST",
         )
-        with request.urlopen(http_request, timeout=self._timeout_seconds) as response:
-            raw = json.loads(response.read().decode("utf-8"))
+        raw = self._post_with_retries(http_request)
 
         message = raw["choices"][0]["message"]
         tool_calls = tuple(_parse_openai_tool_call(item) for item in message.get("tool_calls", []))
@@ -98,6 +103,26 @@ class OpenAIChatCompletionsAdapter:
             assistant_message=assistant_message,
             raw=raw,
         )
+
+    def _post_with_retries(self, http_request: request.Request) -> dict[str, Any]:
+        last_error: BaseException | None = None
+        for attempt_index in range(self._max_retries + 1):
+            try:
+                with request.urlopen(
+                    http_request, timeout=self._timeout_seconds
+                ) as response:
+                    return json.loads(response.read().decode("utf-8"))
+            except error.HTTPError as exc:
+                body = exc.read().decode("utf-8", errors="replace")
+                raise RuntimeError(
+                    f"OpenAI API returned HTTP {exc.code}: {body[:500]}"
+                ) from exc
+            except (TimeoutError, error.URLError) as exc:
+                last_error = exc
+                if attempt_index >= self._max_retries:
+                    break
+                time.sleep(2**attempt_index)
+        raise RuntimeError("OpenAI API request failed after retries") from last_error
 
 
 class ScriptedModelAdapter:
