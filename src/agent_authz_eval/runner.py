@@ -117,7 +117,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--temperature", type=float, default=PilotConfig().temperature)
     parser.add_argument("--n", type=int, default=1)
     parser.add_argument("--raw-output", default="results/raw/s2_pilot_explicit_n1.jsonl")
-    parser.add_argument("--summary-output", default="results/pilot_summary.csv")
+    parser.add_argument("--summary-output", default="results/summary.csv")
     parser.add_argument("--transcripts-output", default="results/pilot_transcripts.md")
     args = parser.parse_args(argv)
 
