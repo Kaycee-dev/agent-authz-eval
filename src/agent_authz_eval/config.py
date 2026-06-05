@@ -5,7 +5,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 DEFAULT_PILOT_PROVIDER = "openai"
-DEFAULT_PILOT_MODEL = "gpt-4.1-nano-2025-04-14"
+OPENAI_FULL_MATRIX_MODEL = "gpt-4.1-mini-2025-04-14"
+ANTHROPIC_FULL_MATRIX_MODEL = "claude-3-5-haiku-20241022"
+OPENWEIGHTS_FULL_MATRIX_MODEL = "meta-llama/Meta-Llama-3.1-70B-Instruct"
+
+FULL_MATRIX_MODELS = {
+    "openai": OPENAI_FULL_MATRIX_MODEL,
+    "anthropic": ANTHROPIC_FULL_MATRIX_MODEL,
+    "openweights": OPENWEIGHTS_FULL_MATRIX_MODEL,
+}
+
+DEFAULT_PILOT_MODEL = OPENAI_FULL_MATRIX_MODEL
 CONTEXT_ONLY = "context_only"
 AUTHZ_POLICY = "authz_policy"
 AUTHZ_POLICY_WITH_INJECTION_GUARD = "authz_policy_with_injection_guard"

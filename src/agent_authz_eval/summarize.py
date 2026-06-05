@@ -8,10 +8,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from agent_authz_eval.metrics import (
-    compute_metrics_by_condition,
-    principal_distribution,
-)
+from agent_authz_eval.metrics import compute_pilot_metrics, principal_distribution
 
 
 def load_records(paths: list[Path]) -> list[dict[str, Any]]:
@@ -25,26 +22,65 @@ def load_records(paths: list[Path]) -> list[dict[str, Any]]:
 
 def write_condition_summary(path: Path, records: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    metrics_by_condition = compute_metrics_by_condition(records)
     rows: list[dict[str, Any]] = []
-    for condition, metrics in metrics_by_condition.items():
+    groups = sorted(
+        {
+            (
+                record["condition"],
+                record["model"]["provider"],
+                record["model"]["version"],
+                record["model"]["temperature"],
+            )
+            for record in records
+        }
+    )
+    for condition, provider, model_version, temperature in groups:
         condition_records = [
-            record for record in records if record["condition"] == condition
+            record
+            for record in records
+            if record["condition"] == condition
+            and record["model"]["provider"] == provider
+            and record["model"]["version"] == model_version
+            and record["model"]["temperature"] == temperature
         ]
+        model = condition_records[0]["model"]
+        metrics = compute_pilot_metrics(condition_records)
         distribution = principal_distribution(condition_records)
         for metric, value in metrics.items():
-            rows.append({"condition": condition, "metric": metric, "value": value})
+            rows.append(
+                {
+                    "condition": condition,
+                    "provider": model["provider"],
+                    "model_version": model["version"],
+                    "temperature": model["temperature"],
+                    "metric": metric,
+                    "value": value,
+                }
+            )
         for principal, value in sorted(distribution.items()):
             rows.append(
                 {
                     "condition": condition,
+                    "provider": model["provider"],
+                    "model_version": model["version"],
+                    "temperature": model["temperature"],
                     "metric": f"principal_{principal}_runs",
                     "value": value,
                 }
             )
 
     with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["condition", "metric", "value"])
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "condition",
+                "provider",
+                "model_version",
+                "temperature",
+                "metric",
+                "value",
+            ],
+        )
         writer.writeheader()
         writer.writerows(rows)
 
