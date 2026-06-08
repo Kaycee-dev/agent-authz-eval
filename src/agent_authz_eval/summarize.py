@@ -4,24 +4,23 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 import statistics
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
 from agent_authz_eval.metrics import compute_pilot_metrics, principal_distribution
+from agent_authz_eval.runner import load_jsonl_records
 from agent_authz_eval.scenarios.schema import VALID_INJECTION_TIERS
 
 RATE_METRICS = ("ocr", "ucr", "injection_exposure_rate", "iis")
+COUNT_METRICS = ("valid_runs", "error_runs")
 
 
 def load_records(paths: list[Path]) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for path in paths:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if line.strip():
-                records.append(json.loads(line))
+        records.extend(load_jsonl_records(path))
     return records
 
 
@@ -65,6 +64,7 @@ def write_condition_summary(path: Path, records: list[dict[str, Any]]) -> None:
                     "std": _std(values),
                     "min": min(values),
                     "max": max(values),
+                    "total": sum(values) if metric in COUNT_METRICS else "",
                 }
             )
         for principal, value in sorted(distribution.items()):
@@ -80,6 +80,7 @@ def write_condition_summary(path: Path, records: list[dict[str, Any]]) -> None:
                     "std": 0.0,
                     "min": value,
                     "max": value,
+                    "total": value,
                 }
             )
 
@@ -97,6 +98,7 @@ def write_condition_summary(path: Path, records: list[dict[str, Any]]) -> None:
                 "std",
                 "min",
                 "max",
+                "total",
             ],
         )
         writer.writeheader()
@@ -114,6 +116,8 @@ def _metric_values_by_run(records: list[dict[str, Any]]) -> dict[str, list[float
         metrics = compute_pilot_metrics(run_records)
         for metric in RATE_METRICS:
             values[metric].append(float(metrics[metric]))
+        for metric in COUNT_METRICS:
+            values[metric].append(float(metrics[metric]))
         for tier, tier_metrics in _tier_metrics(run_records).items():
             values[f"injection_exposure_rate_{tier}"].append(
                 tier_metrics["injection_exposure_rate"]
@@ -126,6 +130,7 @@ def _tier_metrics(records: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
     indirect = [
         record
         for record in records
+        if record.get("record_status", "ok") == "ok"
         if record["scenario"]["bucket"] == "indirect_injection"
     ]
     tiers = sorted(VALID_INJECTION_TIERS)

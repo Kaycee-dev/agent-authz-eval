@@ -6,6 +6,7 @@ import json
 import os
 import time
 from dataclasses import dataclass
+from http.client import RemoteDisconnected
 from typing import Any, Protocol
 from urllib import error, request
 
@@ -28,6 +29,23 @@ class ModelResponse:
     tool_calls: tuple[ToolCall, ...]
     assistant_message: dict[str, Any]
     raw: dict[str, Any]
+
+
+class ModelAPIError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        category: str,
+        retryable: bool,
+        attempt_count: int,
+        status_code: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.category = category
+        self.retryable = retryable
+        self.attempt_count = attempt_count
+        self.status_code = status_code
 
 
 class ModelAdapter(Protocol):
@@ -56,6 +74,7 @@ class OpenAIChatCompletionsAdapter:
         provider: str = "openai",
         timeout_seconds: int = 120,
         max_retries: int = 2,
+        max_backoff_seconds: float = 8.0,
         max_tokens: int = 300,
     ) -> None:
         api_key = os.environ.get(api_key_env)
@@ -68,6 +87,7 @@ class OpenAIChatCompletionsAdapter:
         self._api_url = api_url
         self._timeout_seconds = timeout_seconds
         self._max_retries = max_retries
+        self._max_backoff_seconds = max_backoff_seconds
         self._max_tokens = max_tokens
 
     def complete(
@@ -97,7 +117,15 @@ class OpenAIChatCompletionsAdapter:
         )
         raw = self._post_with_retries(http_request)
 
-        message = raw["choices"][0]["message"]
+        try:
+            message = raw["choices"][0]["message"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise ModelAPIError(
+                f"{self.provider} API returned an invalid response shape",
+                category="invalid_response",
+                retryable=False,
+                attempt_count=1,
+            ) from exc
         tool_calls = tuple(_parse_openai_tool_call(item) for item in message.get("tool_calls", []))
         assistant_message = {
             "role": "assistant",
@@ -114,28 +142,57 @@ class OpenAIChatCompletionsAdapter:
         )
 
     def _post_with_retries(self, http_request: request.Request) -> dict[str, Any]:
-        last_error: BaseException | None = None
         for attempt_index in range(self._max_retries + 1):
+            attempt_count = attempt_index + 1
             try:
                 with request.urlopen(
                     http_request, timeout=self._timeout_seconds
                 ) as response:
                     return json.loads(response.read().decode("utf-8"))
+            except json.JSONDecodeError as exc:
+                if attempt_index < self._max_retries:
+                    self._backoff(attempt_index)
+                    continue
+                raise ModelAPIError(
+                    f"{self.provider} API returned invalid JSON after "
+                    f"{attempt_count} attempts",
+                    category="invalid_response",
+                    retryable=True,
+                    attempt_count=attempt_count,
+                ) from exc
             except error.HTTPError as exc:
                 body = exc.read().decode("utf-8", errors="replace")
-                if exc.code in {429, 500, 502, 503, 504} and attempt_index < self._max_retries:
-                    time.sleep(2**attempt_index)
-                    last_error = exc
+                retryable = exc.code == 429 or 500 <= exc.code <= 599
+                if retryable and attempt_index < self._max_retries:
+                    self._backoff(attempt_index)
                     continue
-                raise RuntimeError(
-                    f"{self.provider} API returned HTTP {exc.code}: {body[:500]}"
+                raise ModelAPIError(
+                    f"{self.provider} API returned HTTP {exc.code}: {body[:500]}",
+                    category="http_error",
+                    retryable=retryable,
+                    attempt_count=attempt_count,
+                    status_code=exc.code,
                 ) from exc
-            except (TimeoutError, error.URLError) as exc:
-                last_error = exc
-                if attempt_index >= self._max_retries:
-                    break
-                time.sleep(2**attempt_index)
-        raise RuntimeError(f"{self.provider} API request failed after retries") from last_error
+            except (
+                TimeoutError,
+                error.URLError,
+                ConnectionError,
+                RemoteDisconnected,
+            ) as exc:
+                if attempt_index < self._max_retries:
+                    self._backoff(attempt_index)
+                    continue
+                raise ModelAPIError(
+                    f"{self.provider} API connection failed after {attempt_count} attempts: "
+                    f"{type(exc).__name__}: {exc}",
+                    category="connection_error",
+                    retryable=True,
+                    attempt_count=attempt_count,
+                ) from exc
+        raise AssertionError("retry loop exited unexpectedly")
+
+    def _backoff(self, attempt_index: int) -> None:
+        time.sleep(min(2**attempt_index, self._max_backoff_seconds))
 
 
 class OpenWeightsChatCompletionsAdapter(OpenAIChatCompletionsAdapter):
@@ -149,6 +206,7 @@ class OpenWeightsChatCompletionsAdapter(OpenAIChatCompletionsAdapter):
         api_key_env: str = "OPENWEIGHTS_API_KEY",
         timeout_seconds: int = 120,
         max_retries: int = 2,
+        max_backoff_seconds: float = 8.0,
         max_tokens: int = 300,
     ) -> None:
         api_url = os.environ.get(OPENWEIGHTS_BASE_URL_ENV) or OPENWEIGHTS_DEFAULT_BASE_URL
@@ -160,6 +218,7 @@ class OpenWeightsChatCompletionsAdapter(OpenAIChatCompletionsAdapter):
             provider="openweights",
             timeout_seconds=timeout_seconds,
             max_retries=max_retries,
+            max_backoff_seconds=max_backoff_seconds,
             max_tokens=max_tokens,
         )
 
@@ -175,6 +234,7 @@ class AnthropicMessagesAdapter:
         api_key_env: str = "ANTHROPIC_API_KEY",
         timeout_seconds: int = 120,
         max_retries: int = 2,
+        max_backoff_seconds: float = 8.0,
         max_tokens: int = 300,
     ) -> None:
         api_key = os.environ.get(api_key_env)
@@ -185,6 +245,7 @@ class AnthropicMessagesAdapter:
         self._api_key = api_key
         self._timeout_seconds = timeout_seconds
         self._max_retries = max_retries
+        self._max_backoff_seconds = max_backoff_seconds
         self._max_tokens = max_tokens
 
     def complete(
@@ -218,28 +279,56 @@ class AnthropicMessagesAdapter:
         return _parse_anthropic_response(raw)
 
     def _post_with_retries(self, http_request: request.Request) -> dict[str, Any]:
-        last_error: BaseException | None = None
         for attempt_index in range(self._max_retries + 1):
+            attempt_count = attempt_index + 1
             try:
                 with request.urlopen(
                     http_request, timeout=self._timeout_seconds
                 ) as response:
                     return json.loads(response.read().decode("utf-8"))
+            except json.JSONDecodeError as exc:
+                if attempt_index < self._max_retries:
+                    self._backoff(attempt_index)
+                    continue
+                raise ModelAPIError(
+                    f"Anthropic API returned invalid JSON after {attempt_count} attempts",
+                    category="invalid_response",
+                    retryable=True,
+                    attempt_count=attempt_count,
+                ) from exc
             except error.HTTPError as exc:
                 body = exc.read().decode("utf-8", errors="replace")
-                if exc.code in {429, 500, 502, 503, 504} and attempt_index < self._max_retries:
-                    time.sleep(2**attempt_index)
-                    last_error = exc
+                retryable = exc.code == 429 or 500 <= exc.code <= 599
+                if retryable and attempt_index < self._max_retries:
+                    self._backoff(attempt_index)
                     continue
-                raise RuntimeError(
-                    f"Anthropic API returned HTTP {exc.code}: {body[:500]}"
+                raise ModelAPIError(
+                    f"Anthropic API returned HTTP {exc.code}: {body[:500]}",
+                    category="http_error",
+                    retryable=retryable,
+                    attempt_count=attempt_count,
+                    status_code=exc.code,
                 ) from exc
-            except (TimeoutError, error.URLError) as exc:
-                last_error = exc
-                if attempt_index >= self._max_retries:
-                    break
-                time.sleep(2**attempt_index)
-        raise RuntimeError("Anthropic API request failed after retries") from last_error
+            except (
+                TimeoutError,
+                error.URLError,
+                ConnectionError,
+                RemoteDisconnected,
+            ) as exc:
+                if attempt_index < self._max_retries:
+                    self._backoff(attempt_index)
+                    continue
+                raise ModelAPIError(
+                    f"Anthropic API connection failed after {attempt_count} attempts: "
+                    f"{type(exc).__name__}: {exc}",
+                    category="connection_error",
+                    retryable=True,
+                    attempt_count=attempt_count,
+                ) from exc
+        raise AssertionError("retry loop exited unexpectedly")
+
+    def _backoff(self, attempt_index: int) -> None:
+        time.sleep(min(2**attempt_index, self._max_backoff_seconds))
 
 
 class ScriptedModelAdapter:

@@ -7,7 +7,7 @@ import csv
 import json
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from agent_authz_eval.config import (
     AUTHZ_POLICY,
@@ -22,7 +22,7 @@ from agent_authz_eval.environment import (
     ToolAttempt,
 )
 from agent_authz_eval.metrics import compute_pilot_metrics, principal_distribution
-from agent_authz_eval.models import ModelAdapter, make_model_adapter
+from agent_authz_eval.models import ModelAPIError, ModelAdapter, make_model_adapter
 from agent_authz_eval.principals import permissions_for_principal
 from agent_authz_eval.scenarios import (
     REQUIRED_BUCKETS,
@@ -52,6 +52,12 @@ def run_scenario(
     config: PilotConfig,
     run_index: int,
 ) -> dict[str, Any]:
+    unit_key = run_unit_key(
+        model_version=adapter.model,
+        condition=config.condition,
+        scenario_id=scenario.id,
+        run_index=run_index,
+    )
     permissions = permissions_for_principal(scenario.principal)
     env = SyntheticDataPortalEnvironment(output_overlays=scenario.output_overlays)
     messages = [
@@ -61,40 +67,62 @@ def run_scenario(
 
     final_text = ""
     tools = build_tool_specs()
-    for _ in range(config.max_tool_rounds):
-        response = adapter.complete(messages=messages, tools=tools)
-        messages.append(response.assistant_message)
-        final_text = response.content
+    try:
+        for _ in range(config.max_tool_rounds):
+            response = adapter.complete(messages=messages, tools=tools)
+            messages.append(response.assistant_message)
+            final_text = response.content
 
-        if not response.tool_calls:
-            break
+            if not response.tool_calls:
+                break
 
-        for tool_call in response.tool_calls:
-            result = env.call_tool(
-                tool_call.name,
-                principal=scenario.principal,
-                principal_permissions=permissions,
-                **tool_call.arguments,
-            )
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": _tool_result_content(result.outcome, result.data, result.error),
-                }
-            )
+            for tool_call in response.tool_calls:
+                result = env.call_tool(
+                    tool_call.name,
+                    principal=scenario.principal,
+                    principal_permissions=permissions,
+                    **tool_call.arguments,
+                )
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": _tool_result_content(
+                            result.outcome, result.data, result.error
+                        ),
+                    }
+                )
+    except ModelAPIError as exc:
+        return {
+            "run_unit_key": unit_key,
+            "record_status": "error",
+            "scenario": _scenario_record(scenario),
+            "run_index": run_index,
+            "condition": config.condition,
+            "model": _model_record(adapter, config),
+            "attempts": [_attempt_record(attempt) for attempt in env.attempt_log],
+            "classification": None,
+            "messages": messages,
+            "error": {
+                "category": exc.category,
+                "message": str(exc),
+                "retryable": exc.retryable,
+                "attempt_count": exc.attempt_count,
+                "status_code": exc.status_code,
+            },
+        }
+
     return {
+        "run_unit_key": unit_key,
+        "record_status": "ok",
         "scenario": _scenario_record(scenario),
         "run_index": run_index,
         "condition": config.condition,
-        "model": {
-            "provider": adapter.provider,
-            "version": adapter.model,
-            "temperature": config.temperature,
-        },
+        "model": _model_record(adapter, config),
         "attempts": [_attempt_record(attempt) for attempt in env.attempt_log],
         "classification": _classify(final_text, scenario, env.attempt_log),
         "messages": messages,
+        "error": None,
     }
 
 
@@ -105,20 +133,33 @@ def run_pilot(
     config: PilotConfig,
     n: int,
     validate: bool = True,
+    completed_keys: set[str] | None = None,
+    record_sink: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[dict[str, Any]]:
     if validate:
         validate_corpus(scenarios)
     records: list[dict[str, Any]] = []
+    completed = completed_keys or set()
     for run_index in range(1, n + 1):
         for scenario in scenarios:
-            records.append(
-                run_scenario(
-                    adapter=adapter,
-                    scenario=scenario,
-                    config=config,
-                    run_index=run_index,
-                )
+            unit_key = run_unit_key(
+                model_version=adapter.model,
+                condition=config.condition,
+                scenario_id=scenario.id,
+                run_index=run_index,
             )
+            if unit_key in completed:
+                continue
+            record = run_scenario(
+                adapter=adapter,
+                scenario=scenario,
+                config=config,
+                run_index=run_index,
+            )
+            records.append(record)
+            if record_sink is not None:
+                record_sink(record)
+            completed.add(unit_key)
     return records
 
 
@@ -134,6 +175,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--temperature", type=float, default=PilotConfig().temperature)
     parser.add_argument("--n", type=int, default=1)
     parser.add_argument("--bucket", default="all", choices=("all", *REQUIRED_BUCKETS))
+    parser.add_argument("--scenario-limit", type=int)
     parser.add_argument("--raw-output", default="results/raw/s2_pilot_authz_policy_n1.jsonl")
     parser.add_argument("--summary-output", default="results/summary.csv")
     parser.add_argument("--transcripts-output", default="results/pilot_transcripts.md")
@@ -148,19 +190,28 @@ def main(argv: list[str] | None = None) -> int:
     scenarios = load_all_scenarios(validate=True)
     if args.bucket != "all":
         scenarios = tuple(scenario for scenario in scenarios if scenario.bucket == args.bucket)
+    if args.scenario_limit is not None:
+        if args.scenario_limit < 1:
+            parser.error("--scenario-limit must be at least 1")
+        scenarios = scenarios[: args.scenario_limit]
     adapter = make_model_adapter(
         provider=config.provider,
         model=config.model,
         temperature=config.temperature,
     )
-    records = run_pilot(
+    raw_path = Path(args.raw_output)
+    existing_records = load_jsonl_records(raw_path, repair_trailing=True)
+    completed_keys = {_record_run_unit_key(record) for record in existing_records}
+    run_pilot(
         adapter=adapter,
         scenarios=scenarios,
         config=config,
         n=args.n,
         validate=False,
+        completed_keys=completed_keys,
+        record_sink=lambda record: append_jsonl_record(raw_path, record),
     )
-    _write_jsonl(Path(args.raw_output), records)
+    records = load_jsonl_records(raw_path, repair_trailing=True)
     _write_summary(Path(args.summary_output), records)
     _write_transcripts(Path(args.transcripts_output), records)
     return 0
@@ -226,6 +277,40 @@ def _scenario_record(scenario: Scenario) -> dict[str, Any]:
     }
 
 
+def _model_record(adapter: ModelAdapter, config: PilotConfig) -> dict[str, Any]:
+    return {
+        "provider": adapter.provider,
+        "version": adapter.model,
+        "temperature": config.temperature,
+    }
+
+
+def run_unit_key(
+    *,
+    model_version: str,
+    condition: str,
+    scenario_id: str,
+    run_index: int,
+) -> str:
+    return json.dumps(
+        [model_version, condition, scenario_id, run_index],
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
+
+
+def _record_run_unit_key(record: dict[str, Any]) -> str:
+    value = record.get("run_unit_key")
+    if isinstance(value, str) and value:
+        return value
+    return run_unit_key(
+        model_version=record["model"]["version"],
+        condition=record["condition"],
+        scenario_id=record["scenario"]["id"],
+        run_index=int(record["run_index"]),
+    )
+
+
 def _attempt_record(attempt: ToolAttempt) -> dict[str, Any]:
     record = asdict(attempt)
     record["outcome"] = attempt.outcome.value
@@ -263,6 +348,56 @@ def _write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
+def append_jsonl_record(path: Path, record: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        handle.flush()
+
+
+def load_jsonl_records(
+    path: Path,
+    *,
+    repair_trailing: bool = False,
+) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+
+    data = path.read_bytes()
+    if not data:
+        return []
+
+    records: list[dict[str, Any]] = []
+    lines = data.splitlines(keepends=True)
+    offset = 0
+    last_valid_line_had_newline = True
+    for index, raw_line in enumerate(lines):
+        line_start = offset
+        offset += len(raw_line)
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        try:
+            record = json.loads(stripped.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            if index != len(lines) - 1:
+                raise ValueError(f"{path}: invalid JSONL record at line {index + 1}")
+            if repair_trailing:
+                with path.open("r+b") as handle:
+                    handle.truncate(line_start)
+            break
+        if not isinstance(record, dict):
+            raise ValueError(f"{path}: JSONL record at line {index + 1} is not an object")
+        records.append(record)
+        last_valid_line_had_newline = raw_line.endswith((b"\n", b"\r"))
+
+    if repair_trailing and records and not last_valid_line_had_newline:
+        with path.open("ab") as handle:
+            handle.write(b"\n")
+            handle.flush()
+    return records
+
+
 def _write_summary(path: Path, records: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     metrics = compute_pilot_metrics(records)
@@ -285,7 +420,10 @@ def _write_transcripts(path: Path, records: list[dict[str, Any]]) -> None:
     selected: list[dict[str, Any]] = []
     for bucket in ("in_scope", "out_of_scope", "indirect_injection"):
         selected.extend(
-            record for record in records if record["scenario"]["bucket"] == bucket
+            record
+            for record in records
+            if record.get("record_status", "ok") == "ok"
+            and record["scenario"]["bucket"] == bucket
         )
     selected_by_bucket: list[dict[str, Any]] = []
     for bucket in ("in_scope", "out_of_scope", "indirect_injection"):
