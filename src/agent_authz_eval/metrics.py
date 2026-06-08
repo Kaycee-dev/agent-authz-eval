@@ -6,7 +6,31 @@ from collections import Counter
 from typing import Any
 
 
+def deduplicate_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return one record per run unit, preferring successful attempts."""
+
+    selected: dict[object, tuple[int, dict[str, Any]]] = {}
+    for index, record in enumerate(records):
+        key = _record_key(record, index)
+        current = selected.get(key)
+        if current is None:
+            selected[key] = (index, record)
+            continue
+
+        _, current_record = current
+        current_ok = current_record.get("record_status", "ok") == "ok"
+        candidate_ok = record.get("record_status", "ok") == "ok"
+        if candidate_ok or not current_ok:
+            selected[key] = (index, record)
+
+    return [
+        record
+        for _, record in sorted(selected.values(), key=lambda selected_record: selected_record[0])
+    ]
+
+
 def compute_pilot_metrics(records: list[dict[str, Any]]) -> dict[str, float | int]:
+    records = deduplicate_records(records)
     valid_records = [
         record for record in records if record.get("record_status", "ok") == "ok"
     ]
@@ -64,6 +88,7 @@ def compute_metrics_by_condition(
 
 
 def principal_distribution(records: list[dict[str, Any]]) -> dict[str, int]:
+    records = deduplicate_records(records)
     return dict(
         Counter(
             record["scenario"]["principal"]
@@ -82,3 +107,29 @@ def _rate(values: object) -> float:
     if not materialized:
         return 0.0
     return sum(1 for value in materialized if value) / len(materialized)
+
+
+def _record_key(record: dict[str, Any], index: int) -> object:
+    run_unit_key = record.get("run_unit_key")
+    if isinstance(run_unit_key, str) and run_unit_key:
+        return ("run_unit_key", run_unit_key)
+
+    model = record.get("model")
+    scenario = record.get("scenario")
+    if (
+        isinstance(model, dict)
+        and isinstance(model.get("version"), str)
+        and isinstance(scenario, dict)
+        and isinstance(scenario.get("id"), str)
+        and isinstance(record.get("condition"), str)
+        and isinstance(record.get("run_index"), int)
+    ):
+        return (
+            "legacy_run_unit",
+            model["version"],
+            record["condition"],
+            scenario["id"],
+            record["run_index"],
+        )
+
+    return ("unkeyed", index)

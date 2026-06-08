@@ -9,7 +9,11 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from agent_authz_eval.metrics import compute_pilot_metrics, principal_distribution
+from agent_authz_eval.metrics import (
+    compute_pilot_metrics,
+    deduplicate_records,
+    principal_distribution,
+)
 from agent_authz_eval.runner import load_jsonl_records
 from agent_authz_eval.scenarios.schema import VALID_INJECTION_TIERS
 
@@ -26,6 +30,7 @@ def load_records(paths: list[Path]) -> list[dict[str, Any]]:
 
 def write_condition_summary(path: Path, records: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    records = deduplicate_records(records)
     rows: list[dict[str, Any]] = []
     groups = sorted(
         {

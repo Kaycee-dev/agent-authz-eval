@@ -21,7 +21,11 @@ from agent_authz_eval.environment import (
     SyntheticDataPortalEnvironment,
     ToolAttempt,
 )
-from agent_authz_eval.metrics import compute_pilot_metrics, principal_distribution
+from agent_authz_eval.metrics import (
+    compute_pilot_metrics,
+    deduplicate_records,
+    principal_distribution,
+)
 from agent_authz_eval.models import ModelAPIError, ModelAdapter, make_model_adapter
 from agent_authz_eval.principals import permissions_for_principal
 from agent_authz_eval.scenarios import (
@@ -139,7 +143,7 @@ def run_pilot(
     if validate:
         validate_corpus(scenarios)
     records: list[dict[str, Any]] = []
-    completed = completed_keys or set()
+    completed = set(completed_keys or ())
     for run_index in range(1, n + 1):
         for scenario in scenarios:
             unit_key = run_unit_key(
@@ -201,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     raw_path = Path(args.raw_output)
     existing_records = load_jsonl_records(raw_path, repair_trailing=True)
-    completed_keys = {_record_run_unit_key(record) for record in existing_records}
+    completed_keys = completed_run_unit_keys(existing_records)
     run_pilot(
         adapter=adapter,
         scenarios=scenarios,
@@ -212,6 +216,7 @@ def main(argv: list[str] | None = None) -> int:
         record_sink=lambda record: append_jsonl_record(raw_path, record),
     )
     records = load_jsonl_records(raw_path, repair_trailing=True)
+    records = deduplicate_records(records)
     _write_summary(Path(args.summary_output), records)
     _write_transcripts(Path(args.transcripts_output), records)
     return 0
@@ -309,6 +314,14 @@ def _record_run_unit_key(record: dict[str, Any]) -> str:
         scenario_id=record["scenario"]["id"],
         run_index=int(record["run_index"]),
     )
+
+
+def completed_run_unit_keys(records: list[dict[str, Any]]) -> set[str]:
+    return {
+        _record_run_unit_key(record)
+        for record in deduplicate_records(records)
+        if record.get("record_status", "ok") == "ok"
+    }
 
 
 def _attempt_record(attempt: ToolAttempt) -> dict[str, Any]:

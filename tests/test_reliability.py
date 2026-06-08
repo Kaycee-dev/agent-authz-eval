@@ -14,8 +14,11 @@ from agent_authz_eval.models import (
 )
 from agent_authz_eval.runner import (
     append_jsonl_record,
+    completed_run_unit_keys,
     load_jsonl_records,
     run_pilot,
+    run_scenario,
+    run_unit_key,
 )
 from agent_authz_eval.scenarios import Scenario
 
@@ -60,7 +63,7 @@ def test_mid_run_crash_resumes_only_missing_units(tmp_path):
 
     first_records = load_jsonl_records(path, repair_trailing=True)
     assert len(first_records) == 2
-    completed_keys = {record["run_unit_key"] for record in first_records}
+    completed_keys = completed_run_unit_keys(first_records)
 
     second_adapter = CountingTextAdapter()
     second_records = run_pilot(
@@ -78,6 +81,88 @@ def test_mid_run_crash_resumes_only_missing_units(tmp_path):
     assert len(second_records) == 3
     assert len(all_records) == 5
     assert len({record["run_unit_key"] for record in all_records}) == 5
+
+
+def test_error_key_is_retried_and_success_supersedes_stale_error(tmp_path):
+    path = tmp_path / "sticky-error.jsonl"
+    scenarios = tuple(_scenario(index) for index in range(1, 4))
+    config = PilotConfig(
+        provider="scripted",
+        model="resume-test-model",
+        condition=AUTHZ_POLICY,
+    )
+    terminal_error = ModelAPIError(
+        "retry budget exhausted",
+        category="connection_error",
+        retryable=True,
+        attempt_count=3,
+    )
+
+    append_jsonl_record(
+        path,
+        run_scenario(
+            adapter=CountingTextAdapter(error=terminal_error),
+            scenario=scenarios[0],
+            config=config,
+            run_index=1,
+        ),
+    )
+    append_jsonl_record(
+        path,
+        run_scenario(
+            adapter=CountingTextAdapter(),
+            scenario=scenarios[1],
+            config=config,
+            run_index=1,
+        ),
+    )
+    append_jsonl_record(
+        path,
+        run_scenario(
+            adapter=CountingTextAdapter(error=terminal_error),
+            scenario=scenarios[2],
+            config=config,
+            run_index=1,
+        ),
+    )
+
+    existing = load_jsonl_records(path)
+    completed = completed_run_unit_keys(existing)
+    expected_keys = [
+        run_unit_key(
+            model_version="resume-test-model",
+            condition=AUTHZ_POLICY,
+            scenario_id=scenario.id,
+            run_index=1,
+        )
+        for scenario in scenarios
+    ]
+    assert expected_keys[0] not in completed
+    assert expected_keys[1] in completed
+    assert expected_keys[2] not in completed
+
+    retry_adapter = CountingTextAdapter()
+    retried = run_pilot(
+        adapter=retry_adapter,
+        scenarios=scenarios[:2],
+        config=config,
+        n=1,
+        validate=False,
+        completed_keys=completed,
+        record_sink=lambda record: append_jsonl_record(path, record),
+    )
+
+    all_records = load_jsonl_records(path)
+    metrics = compute_pilot_metrics(all_records)
+    assert retry_adapter.calls == 1
+    assert len(retried) == 1
+    assert retried[0]["scenario"]["id"] == scenarios[0].id
+    assert retried[0]["record_status"] == "ok"
+    assert expected_keys[0] not in completed
+    assert expected_keys[1] in completed
+    assert metrics["total_runs"] == 3
+    assert metrics["valid_runs"] == 2
+    assert metrics["error_runs"] == 1
 
 
 def test_truncated_trailing_line_is_repaired_and_key_is_rerun(tmp_path):
