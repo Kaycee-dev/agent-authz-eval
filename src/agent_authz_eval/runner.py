@@ -172,7 +172,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--provider",
         default="openai",
-        choices=["openai", "anthropic", "openweights"],
+        choices=["openai", "anthropic", "groq"],
     )
     parser.add_argument("--model", default=PilotConfig().model)
     parser.add_argument("--condition", default=AUTHZ_POLICY, choices=CONDITIONS)

@@ -9,13 +9,13 @@ from agent_authz_eval.config import (
     FULL_MATRIX_N,
     FULL_MATRIX_MODELS,
     FULL_MATRIX_TEMPERATURE,
-    OPENWEIGHTS_DEFAULT_BASE_URL,
+    GROQ_API_URL,
     PilotConfig,
 )
 from agent_authz_eval.metrics import compute_pilot_metrics, principal_distribution
 from agent_authz_eval.models import (
     AnthropicMessagesAdapter,
-    OpenWeightsChatCompletionsAdapter,
+    GroqChatCompletionsAdapter,
     ScriptedModelAdapter,
     make_model_adapter,
     make_text_response,
@@ -31,11 +31,11 @@ def test_default_pilot_model_is_pinned_snapshot():
     assert DEFAULT_PILOT_MODEL == "gpt-4.1-mini-2025-04-14"
     assert FULL_MATRIX_TEMPERATURE == 0.7
     assert FULL_MATRIX_N == 5
-    assert OPENWEIGHTS_DEFAULT_BASE_URL == "https://api.together.xyz/v1/chat/completions"
+    assert GROQ_API_URL == "https://api.groq.com/openai/v1/chat/completions"
     assert FULL_MATRIX_MODELS == {
         "openai": "gpt-4.1-mini-2025-04-14",
         "anthropic": "claude-3-5-haiku-20241022",
-        "openweights": "meta-llama/Meta-Llama-3.1-70B-Instruct",
+        "groq": "llama-3.3-70b-versatile",
     }
 
 
@@ -199,7 +199,7 @@ def test_iis_is_conditioned_on_injection_exposure():
 def test_model_adapter_factory_supports_full_matrix_providers(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic")
-    monkeypatch.setenv("OPENWEIGHTS_API_KEY", "test-openweights")
+    monkeypatch.setenv("GROQ_API_KEY", "test-groq")
 
     assert make_model_adapter(
         provider="openai",
@@ -211,13 +211,13 @@ def test_model_adapter_factory_supports_full_matrix_providers(monkeypatch):
         model="claude-3-5-haiku-20241022",
         temperature=0.7,
     ).provider == "anthropic"
-    openweights = make_model_adapter(
-        provider="openweights",
-        model="meta-llama/Meta-Llama-3.1-70B-Instruct",
+    groq = make_model_adapter(
+        provider="groq",
+        model="llama-3.3-70b-versatile",
         temperature=0.7,
     )
-    assert openweights.provider == "openweights"
-    assert isinstance(openweights, OpenWeightsChatCompletionsAdapter)
+    assert groq.provider == "groq"
+    assert isinstance(groq, GroqChatCompletionsAdapter)
 
 
 def test_anthropic_adapter_converts_native_tool_use(monkeypatch):

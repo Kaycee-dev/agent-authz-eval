@@ -10,10 +10,7 @@ from http.client import RemoteDisconnected
 from typing import Any, Protocol
 from urllib import error, request
 
-from agent_authz_eval.config import (
-    OPENWEIGHTS_BASE_URL_ENV,
-    OPENWEIGHTS_DEFAULT_BASE_URL,
-)
+from agent_authz_eval.config import GROQ_API_URL
 
 
 @dataclass(frozen=True)
@@ -75,6 +72,7 @@ class OpenAIChatCompletionsAdapter:
         timeout_seconds: int = 120,
         max_retries: int = 2,
         max_backoff_seconds: float = 8.0,
+        min_request_interval_seconds: float = 0.0,
         max_tokens: int = 300,
     ) -> None:
         api_key = os.environ.get(api_key_env)
@@ -88,6 +86,8 @@ class OpenAIChatCompletionsAdapter:
         self._timeout_seconds = timeout_seconds
         self._max_retries = max_retries
         self._max_backoff_seconds = max_backoff_seconds
+        self._min_request_interval_seconds = min_request_interval_seconds
+        self._last_request_at = 0.0
         self._max_tokens = max_tokens
 
     def complete(
@@ -112,6 +112,7 @@ class OpenAIChatCompletionsAdapter:
             headers={
                 "Authorization": f"Bearer {self._api_key}",
                 "Content-Type": "application/json",
+                "User-Agent": "agent-authz-eval/0.1",
             },
             method="POST",
         )
@@ -145,6 +146,7 @@ class OpenAIChatCompletionsAdapter:
         for attempt_index in range(self._max_retries + 1):
             attempt_count = attempt_index + 1
             try:
+                self._pace_request()
                 with request.urlopen(
                     http_request, timeout=self._timeout_seconds
                 ) as response:
@@ -164,7 +166,7 @@ class OpenAIChatCompletionsAdapter:
                 body = exc.read().decode("utf-8", errors="replace")
                 retryable = exc.code == 429 or 500 <= exc.code <= 599
                 if retryable and attempt_index < self._max_retries:
-                    self._backoff(attempt_index)
+                    self._backoff(attempt_index, _retry_after_seconds(exc))
                     continue
                 raise ModelAPIError(
                     f"{self.provider} API returned HTTP {exc.code}: {body[:500]}",
@@ -191,34 +193,49 @@ class OpenAIChatCompletionsAdapter:
                 ) from exc
         raise AssertionError("retry loop exited unexpectedly")
 
-    def _backoff(self, attempt_index: int) -> None:
-        time.sleep(min(2**attempt_index, self._max_backoff_seconds))
+    def _backoff(
+        self, attempt_index: int, retry_after_seconds: float | None = None
+    ) -> None:
+        delay = 2**attempt_index
+        if retry_after_seconds is not None:
+            delay = max(delay, retry_after_seconds)
+        time.sleep(min(delay, self._max_backoff_seconds))
+
+    def _pace_request(self) -> None:
+        elapsed = time.monotonic() - self._last_request_at
+        remaining = self._min_request_interval_seconds - elapsed
+        if remaining > 0:
+            time.sleep(remaining)
+        self._last_request_at = time.monotonic()
 
 
-class OpenWeightsChatCompletionsAdapter(OpenAIChatCompletionsAdapter):
-    """OpenAI-compatible adapter for an open-weights inference host."""
+class GroqChatCompletionsAdapter(OpenAIChatCompletionsAdapter):
+    """OpenAI-compatible adapter paced for the Groq free tier."""
 
     def __init__(
         self,
         *,
         model: str,
         temperature: float,
-        api_key_env: str = "OPENWEIGHTS_API_KEY",
+        api_key_env: str = "GROQ_API_KEY",
         timeout_seconds: int = 120,
-        max_retries: int = 2,
-        max_backoff_seconds: float = 8.0,
+        max_retries: int = 6,
+        max_backoff_seconds: float = 60.0,
+        min_request_interval_seconds: float = 2.1,
         max_tokens: int = 300,
     ) -> None:
-        api_url = os.environ.get(OPENWEIGHTS_BASE_URL_ENV) or OPENWEIGHTS_DEFAULT_BASE_URL
+        if not os.environ.get(api_key_env) and os.environ.get("OPENWEIGHTS_API_KEY"):
+            api_key_env = "OPENWEIGHTS_API_KEY"
         super().__init__(
             model=model,
             temperature=temperature,
             api_key_env=api_key_env,
-            api_url=api_url,
-            provider="openweights",
+            api_url=GROQ_API_URL,
+            provider="groq",
             timeout_seconds=timeout_seconds,
             max_retries=max_retries,
             max_backoff_seconds=max_backoff_seconds,
+            min_request_interval_seconds=min_request_interval_seconds,
             max_tokens=max_tokens,
         )
 
@@ -272,6 +289,7 @@ class AnthropicMessagesAdapter:
                 "x-api-key": self._api_key,
                 "anthropic-version": "2023-06-01",
                 "Content-Type": "application/json",
+                "User-Agent": "agent-authz-eval/0.1",
             },
             method="POST",
         )
@@ -361,8 +379,8 @@ def make_model_adapter(
         return OpenAIChatCompletionsAdapter(model=model, temperature=temperature)
     if provider == "anthropic":
         return AnthropicMessagesAdapter(model=model, temperature=temperature)
-    if provider == "openweights":
-        return OpenWeightsChatCompletionsAdapter(model=model, temperature=temperature)
+    if provider == "groq":
+        return GroqChatCompletionsAdapter(model=model, temperature=temperature)
     raise ValueError(f"unsupported provider: {provider}")
 
 
@@ -526,3 +544,15 @@ def _parse_anthropic_response(raw: dict[str, Any]) -> ModelResponse:
         assistant_message=assistant_message,
         raw=raw,
     )
+
+
+def _retry_after_seconds(exc: error.HTTPError) -> float | None:
+    if exc.headers is None:
+        return None
+    value = exc.headers.get("Retry-After")
+    if value is None:
+        return None
+    try:
+        return max(float(value), 0.0)
+    except ValueError:
+        return None
