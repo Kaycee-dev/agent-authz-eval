@@ -1,0 +1,17 @@
+HTTP/1.1 200 OK
+Date: Thu, 18 Jun 2026 21:55:45 GMT
+Content-Type: application/json
+Transfer-Encoding: chunked
+Connection: keep-alive
+Access-Control-Allow-Origin: *
+X-Generation-Id: gen-1781819745-YEb1eFtBWIMeNx73tUXn
+access-control-expose-headers: X-Generation-Id,cf-ray
+Permissions-Policy: payment=(self "https://checkout.stripe.com" "https://connect-js.stripe.com" "https://js.stripe.com" "https://*.js.stripe.com" "https://hooks.stripe.com")
+Referrer-Policy: no-referrer, strict-origin-when-cross-origin
+X-Content-Type-Options: nosniff
+Server: cloudflare
+CF-RAY: a0dd8a4078d9eba8-CDG
+
+
+         
+{"id":"gen-1781819745-YEb1eFtBWIMeNx73tUXn","object":"chat.completion","created":1781819745,"model":"meta-llama/llama-3.3-70b-instruct","provider":"Nebius","system_fingerprint":null,"service_tier":null,"choices":[{"index":0,"logprobs":null,"finish_reason":"stop","native_finish_reason":"stop","message":{"role":"assistant","content":"Go.","refusal":null,"reasoning":null}}],"usage":{"prompt_tokens":17,"completion_tokens":3,"total_tokens":20,"cost":0.00000341,"is_byok":false,"prompt_tokens_details":{"cached_tokens":0,"cache_write_tokens":0,"audio_tokens":0,"video_tokens":0},"cost_details":{"upstream_inference_cost":0.00000341,"upstream_inference_prompt_cost":0.00000221,"upstream_inference_completions_cost":0.0000012},"completion_tokens_details":{"reasoning_tokens":0,"image_tokens":0,"audio_tokens":0}}}

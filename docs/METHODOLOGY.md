@@ -61,3 +61,25 @@ preserves both the original data and the finding.
 `in_scope_admin_delete_profile_002`. All other metrics (OCR, IIS, per-tier
 IIS) and all other scenarios are unaffected. The full corrected UCR figure
 becomes 0/115 = 0.000 across all evaluated arms.
+
+## Known Schema Limitations
+
+### Response Headers and Provider-Echoed Fields Not Persisted
+
+The runner adapter records the request-side model identifier in each run
+record's `model.version` field but does not persist HTTP response headers
+or provider-echoed response fields (e.g. `usage`, `id`, OpenRouter's
+routing-provider attribution).
+
+For the OpenRouter arm, model identity is established by:
+(a) The exact model alias sent in every request (`meta-llama/llama-3.3-70b-instruct`),
+    hard-coded in the adapter and tested.
+(b) A one-shot provenance capture stored at
+    `results/openrouter_provenance_capture.txt`, recording the full raw
+    response OpenRouter returned for an identical request.
+
+Per-request upstream-provider attribution (i.e. which underlying inference
+provider OpenRouter routed a given call to) is not recorded. OpenRouter
+routes across multiple providers serving the same Meta Llama-3.3-70B-Instruct
+weights; the methodology assumes weight identity is preserved across
+upstream providers under a stable alias.
