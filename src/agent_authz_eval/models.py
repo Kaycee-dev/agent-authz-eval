@@ -224,8 +224,6 @@ class GroqChatCompletionsAdapter(OpenAIChatCompletionsAdapter):
         min_request_interval_seconds: float = 2.1,
         max_tokens: int = 300,
     ) -> None:
-        if not os.environ.get(api_key_env) and os.environ.get("OPENWEIGHTS_API_KEY"):
-            api_key_env = "OPENWEIGHTS_API_KEY"
         super().__init__(
             model=model,
             temperature=temperature,
