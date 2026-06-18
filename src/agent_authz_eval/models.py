@@ -10,7 +10,11 @@ from http.client import RemoteDisconnected
 from typing import Any, Protocol
 from urllib import error, request
 
-from agent_authz_eval.config import GROQ_API_URL
+from agent_authz_eval.config import (
+    GROQ_API_URL,
+    OPENROUTER_API_URL,
+    OPENROUTER_FULL_MATRIX_MODEL,
+)
 
 
 @dataclass(frozen=True)
@@ -74,6 +78,7 @@ class OpenAIChatCompletionsAdapter:
         max_backoff_seconds: float = 8.0,
         min_request_interval_seconds: float = 0.0,
         max_tokens: int = 300,
+        extra_headers: dict[str, str] | None = None,
     ) -> None:
         api_key = os.environ.get(api_key_env)
         if not api_key:
@@ -89,6 +94,7 @@ class OpenAIChatCompletionsAdapter:
         self._min_request_interval_seconds = min_request_interval_seconds
         self._last_request_at = 0.0
         self._max_tokens = max_tokens
+        self._extra_headers = dict(extra_headers or {})
 
     def complete(
         self,
@@ -106,14 +112,16 @@ class OpenAIChatCompletionsAdapter:
             "max_tokens": self._max_tokens,
         }
         body = json.dumps(payload).encode("utf-8")
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": "agent-authz-eval/0.1",
+        }
+        headers.update(self._extra_headers)
         http_request = request.Request(
             self._api_url,
             data=body,
-            headers={
-                "Authorization": f"Bearer {self._api_key}",
-                "Content-Type": "application/json",
-                "User-Agent": "agent-authz-eval/0.1",
-            },
+            headers=headers,
             method="POST",
         )
         raw = self._post_with_retries(http_request)
@@ -235,6 +243,39 @@ class GroqChatCompletionsAdapter(OpenAIChatCompletionsAdapter):
             max_backoff_seconds=max_backoff_seconds,
             min_request_interval_seconds=min_request_interval_seconds,
             max_tokens=max_tokens,
+        )
+
+
+class OpenRouterChatCompletionsAdapter(OpenAIChatCompletionsAdapter):
+    """OpenAI-compatible adapter for the OpenRouter open-weights arm."""
+
+    def __init__(
+        self,
+        *,
+        model: str = OPENROUTER_FULL_MATRIX_MODEL,
+        temperature: float,
+        api_key_env: str = "OPENWEIGHTS_API_KEY",
+        timeout_seconds: int = 120,
+        max_retries: int = 6,
+        max_backoff_seconds: float = 60.0,
+        min_request_interval_seconds: float = 1.0,
+        max_tokens: int = 300,
+    ) -> None:
+        super().__init__(
+            model=model,
+            temperature=temperature,
+            api_key_env=api_key_env,
+            api_url=OPENROUTER_API_URL,
+            provider="openrouter",
+            timeout_seconds=timeout_seconds,
+            max_retries=max_retries,
+            max_backoff_seconds=max_backoff_seconds,
+            min_request_interval_seconds=min_request_interval_seconds,
+            max_tokens=max_tokens,
+            extra_headers={
+                "HTTP-Referer": "https://github.com/Kaycee-dev/agent-authz-eval",
+                "X-Title": "agent-authz-eval",
+            },
         )
 
 
@@ -379,6 +420,8 @@ def make_model_adapter(
         return AnthropicMessagesAdapter(model=model, temperature=temperature)
     if provider == "groq":
         return GroqChatCompletionsAdapter(model=model, temperature=temperature)
+    if provider == "openrouter":
+        return OpenRouterChatCompletionsAdapter(model=model, temperature=temperature)
     raise ValueError(f"unsupported provider: {provider}")
 
 

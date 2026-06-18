@@ -15,6 +15,7 @@ from agent_authz_eval.config import (
     AUTHZ_POLICY_WITH_INJECTION_GUARD,
     CONDITIONS,
     CONTEXT_ONLY,
+    FULL_MATRIX_MODELS,
     PilotConfig,
 )
 from agent_authz_eval.environment import (
@@ -174,9 +175,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--provider",
         default="openai",
-        choices=["openai", "anthropic", "groq"],
+        choices=["openai", "anthropic", "groq", "openrouter"],
     )
-    parser.add_argument("--model", default=PilotConfig().model)
+    parser.add_argument("--model")
     parser.add_argument("--condition", default=AUTHZ_POLICY, choices=CONDITIONS)
     parser.add_argument("--temperature", type=float, default=PilotConfig().temperature)
     parser.add_argument("--n", type=int, default=1)
@@ -189,7 +190,7 @@ def main(argv: list[str] | None = None) -> int:
 
     config = PilotConfig(
         provider=args.provider,
-        model=args.model,
+        model=args.model or FULL_MATRIX_MODELS.get(args.provider, PilotConfig().model),
         condition=args.condition,
         temperature=args.temperature,
     )

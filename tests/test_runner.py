@@ -42,6 +42,7 @@ def test_default_pilot_model_is_pinned_snapshot():
         "openai": "gpt-4.1-mini-2025-04-14",
         "anthropic": "claude-3-5-haiku-20241022",
         "groq": "llama-3.3-70b-versatile",
+        "openrouter": "meta-llama/llama-3.3-70b-instruct",
     }
 
 
