@@ -1,5 +1,6 @@
 import csv
 import json
+import os
 
 from agent_authz_eval.config import (
     AUTHZ_POLICY,
@@ -21,7 +22,12 @@ from agent_authz_eval.models import (
     make_text_response,
     make_tool_response,
 )
-from agent_authz_eval.runner import _system_prompt, run_pilot, run_scenario
+from agent_authz_eval.runner import (
+    _load_dotenv_into_process,
+    _system_prompt,
+    run_pilot,
+    run_scenario,
+)
 from agent_authz_eval.scenarios import Scenario
 from agent_authz_eval.summarize import write_condition_summary
 from agent_authz_eval.tool_specs import build_tool_specs
@@ -37,6 +43,27 @@ def test_default_pilot_model_is_pinned_snapshot():
         "anthropic": "claude-3-5-haiku-20241022",
         "groq": "llama-3.3-70b-versatile",
     }
+
+
+def test_runner_dotenv_loader_overrides_stale_process_env(monkeypatch, tmp_path):
+    dotenv = tmp_path / ".env"
+    dotenv.write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=sk-proj-good",
+                "ANTHROPIC_API_KEY='sk-ant-good'",
+                "IGNORED",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "stale-openai")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "stale-anthropic")
+
+    _load_dotenv_into_process(dotenv)
+
+    assert os.environ["OPENAI_API_KEY"] == "sk-proj-good"
+    assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-good"
 
 
 def test_system_prompt_blocks_are_independently_toggleable():

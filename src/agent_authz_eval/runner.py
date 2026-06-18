@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable
@@ -168,6 +169,7 @@ def run_pilot(
 
 
 def main(argv: list[str] | None = None) -> int:
+    _load_dotenv_into_process()
     parser = argparse.ArgumentParser(description="Run the S2 pilot.")
     parser.add_argument(
         "--provider",
@@ -220,6 +222,31 @@ def main(argv: list[str] | None = None) -> int:
     _write_summary(Path(args.summary_output), records)
     _write_transcripts(Path(args.transcripts_output), records)
     return 0
+
+
+def _load_dotenv_into_process(path: Path = Path(".env")) -> None:
+    """Load simple KEY=VALUE entries so runner launches do not inherit stale keys."""
+    if not path.exists():
+        return
+
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        if "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key or not key.replace("_", "").isalnum() or key[0].isdigit():
+            continue
+
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        os.environ[key] = value
 
 
 def _system_prompt(
