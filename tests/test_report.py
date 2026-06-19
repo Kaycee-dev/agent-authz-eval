@@ -3,14 +3,19 @@ from __future__ import annotations
 import csv
 import json
 import math
+import re
 from pathlib import Path
 
 from agent_authz_eval.report import (
+    build_findings_document,
     canonicalize_records,
     compute_consolidated_rows,
     consolidate,
+    main,
     matrix_raw_paths,
     verify_consolidated_csv,
+    verify_findings_json,
+    write_findings_json,
 )
 
 
@@ -259,10 +264,183 @@ def test_verify_reports_mismatch(tmp_path):
     assert mismatches[0].metric == "ocr"
 
 
+def test_findings_json_schema_validation(tmp_path):
+    raw_dir, csv_path, findings_path = _write_findings_fixture(tmp_path)
+
+    document = json.loads(findings_path.read_text(encoding="utf-8"))
+
+    assert document["version"] == "1.0"
+    assert document["generated_from"] == "results/s2_consolidated.csv"
+    assert document["raw_data_sources"] == ["results/raw/s2_full_matrix_*_t0_7_n5.jsonl"]
+    assert document["raw_data_excluded"] == [
+        "results/raw/s2_full_matrix_groq_context_only_t0_7_n5.jsonl"
+    ]
+    assert document["canonical_dedup"]
+    assert len(document["findings"]) == 8
+    assert verify_findings_json(raw_dir, csv_path, findings_path) == []
+
+
+def test_findings_ids_are_unique_and_follow_pattern(tmp_path):
+    _, _, findings_path = _write_findings_fixture(tmp_path)
+    findings = json.loads(findings_path.read_text(encoding="utf-8"))["findings"]
+
+    ids = [finding["id"] for finding in findings]
+
+    assert len(ids) == len(set(ids))
+    assert all(re.fullmatch(r"F\d+", finding_id) for finding_id in ids)
+
+
+def test_findings_have_non_empty_claim_predicate_and_provenance(tmp_path):
+    _, _, findings_path = _write_findings_fixture(tmp_path)
+    findings = json.loads(findings_path.read_text(encoding="utf-8"))["findings"]
+
+    for finding in findings:
+        assert finding["claim"]
+        assert finding["predicate"]
+        assert finding["provenance"]
+        assert finding["notes"]
+
+
+def test_verify_findings_cli_accepts_matching_document(tmp_path, capsys):
+    raw_dir, csv_path, findings_path = _write_findings_fixture(tmp_path)
+
+    exit_code = main(
+        [
+            "verify-findings",
+            "--raw-dir",
+            str(raw_dir),
+            "--csv",
+            str(csv_path),
+            "--input",
+            str(findings_path),
+        ]
+    )
+
+    assert exit_code == 0
+    assert capsys.readouterr().out.strip() == (
+        "verify-findings passed: 8 findings, all values match raw"
+    )
+
+
+def test_verify_findings_cli_reports_offending_id_on_value_mismatch(tmp_path, capsys):
+    raw_dir, csv_path, findings_path = _write_findings_fixture(tmp_path)
+    document = json.loads(findings_path.read_text(encoding="utf-8"))
+    document["findings"][0]["values"]["openrouter_authz_policy"]["ocr"]["rate"] += 0.001
+    findings_path.write_text(json.dumps(document), encoding="utf-8")
+
+    exit_code = main(
+        [
+            "verify-findings",
+            "--raw-dir",
+            str(raw_dir),
+            "--csv",
+            str(csv_path),
+            "--input",
+            str(findings_path),
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 2
+    assert "F1" in output
+    assert "openrouter_authz_policy" in output
+
+
+def test_verify_findings_rejects_missing_provenance_raw_path(tmp_path):
+    raw_dir, csv_path, findings_path = _write_findings_fixture(tmp_path)
+    document = json.loads(findings_path.read_text(encoding="utf-8"))
+    document["findings"][0]["provenance"][0]["raw_path"] = (
+        "results/raw/s2_full_matrix_missing_context_only_t0_7_n5.jsonl"
+    )
+    findings_path.write_text(json.dumps(document), encoding="utf-8")
+
+    errors = verify_findings_json(raw_dir, csv_path, findings_path)
+
+    assert any("F1" in error and "raw_path does not exist" in error for error in errors)
+
+
+def test_verify_findings_rejects_unknown_predicate(tmp_path):
+    raw_dir, csv_path, findings_path = _write_findings_fixture(tmp_path)
+    document = json.loads(findings_path.read_text(encoding="utf-8"))
+    document["findings"][0]["predicate"] = "made-up predicate"
+    findings_path.write_text(json.dumps(document), encoding="utf-8")
+
+    errors = verify_findings_json(raw_dir, csv_path, findings_path)
+
+    assert any("F1" in error and "unknown predicate" in error for error in errors)
+
+
+def test_verify_findings_rejects_groq_provenance_raw_path(tmp_path):
+    raw_dir, csv_path, findings_path = _write_findings_fixture(tmp_path)
+    groq_path = tmp_path / "results/raw/s2_full_matrix_groq_context_only_t0_7_n5.jsonl"
+    _write_jsonl(groq_path, [_record("groq_1", "out_of_scope", True, False, model="groq")])
+    document = json.loads(findings_path.read_text(encoding="utf-8"))
+    document["findings"][0]["provenance"][0]["raw_path"] = (
+        "results/raw/s2_full_matrix_groq_context_only_t0_7_n5.jsonl"
+    )
+    findings_path.write_text(json.dumps(document), encoding="utf-8")
+
+    errors = verify_findings_json(raw_dir, csv_path, findings_path)
+
+    assert any("F1" in error and "excluded groq" in error for error in errors)
+
+
+def test_f1_values_include_openrouter_authz_policy_ocr(tmp_path):
+    raw_dir, csv_path, _ = _write_findings_fixture(tmp_path)
+    document = build_findings_document(raw_dir, compute_consolidated_rows(raw_dir))
+    value = document["findings"][0]["values"]["openrouter_authz_policy"]["ocr"]
+
+    assert value == {"numerator": 1, "denominator": 1, "rate": 1.0}
+
+
 def _row_by_metric(rows, metric):
     matches = [row for row in rows if row.metric == metric]
     assert len(matches) == 1
     return matches[0]
+
+
+def _write_findings_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
+    raw_dir = tmp_path / "results" / "raw"
+    csv_path = tmp_path / "results" / "s2_consolidated.csv"
+    findings_path = tmp_path / "results" / "findings.json"
+    for model in ("openai", "anthropic", "openrouter"):
+        for condition in (
+            "context_only",
+            "authz_policy",
+            "authz_policy_with_injection_guard",
+        ):
+            precondition_target_executed = model == "openrouter"
+            records = [
+                _record(
+                    "in_scope_admin_delete_profile_002",
+                    "in_scope",
+                    False,
+                    precondition_target_executed,
+                    model=model,
+                    condition=condition,
+                ),
+                _record(
+                    "out_of_scope_001",
+                    "out_of_scope",
+                    True,
+                    False,
+                    model=model,
+                    condition=condition,
+                ),
+                _record(
+                    "indirect_overt_001",
+                    "indirect_injection",
+                    model == "openai",
+                    True,
+                    model=model,
+                    condition=condition,
+                    tier="overt_instruction",
+                ),
+            ]
+            _write_matrix(raw_dir, model, condition, records)
+    consolidate(raw_dir, csv_path)
+    write_findings_json(raw_dir, csv_path, findings_path)
+    return raw_dir, csv_path, findings_path
 
 
 def _write_matrix(
