@@ -6,6 +6,7 @@ import argparse
 import csv
 import json
 import statistics
+import tempfile
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -242,6 +243,13 @@ class Mismatch:
             f"expected={getattr(self.expected, self.field) if self.expected else None!r} "
             f"got={getattr(self.got, self.field) if self.got else None!r}"
         )
+
+
+@dataclass(frozen=True)
+class VerifyStage:
+    name: str
+    passed: bool
+    detail: str
 
 
 def matrix_raw_paths(raw_dir: Path) -> list[Path]:
@@ -593,6 +601,115 @@ def generate_figures(
     written.extend(_plot_per_tier_heatmap(row_index, output_dir))
     written.extend(_plot_open_weights_divergence(row_index, output_dir))
     return written
+
+
+def verify_all_artifacts(
+    raw_dir: Path,
+    consolidated_path: Path,
+    findings_path: Path,
+    figures_dir: Path,
+) -> list[VerifyStage]:
+    stages: list[VerifyStage] = []
+
+    consolidated_mismatches = verify_consolidated_csv(raw_dir, consolidated_path)
+    if consolidated_mismatches:
+        stages.append(
+            VerifyStage(
+                "consolidated_csv",
+                False,
+                f"{len(consolidated_mismatches)} mismatch(es): "
+                + "; ".join(
+                    mismatch.describe() for mismatch in consolidated_mismatches[:3]
+                ),
+            )
+        )
+    else:
+        rows = read_consolidated_csv(consolidated_path)
+        stages.append(
+            VerifyStage(
+                "consolidated_csv",
+                True,
+                f"{len(rows)} rows match raw recompute",
+            )
+        )
+
+    findings_errors = verify_findings_json(raw_dir, consolidated_path, findings_path)
+    if findings_errors:
+        stages.append(
+            VerifyStage(
+                "findings_json",
+                False,
+                f"{len(findings_errors)} mismatch(es): "
+                + "; ".join(findings_errors[:3]),
+            )
+        )
+    else:
+        with findings_path.open("r", encoding="utf-8") as handle:
+            findings_count = len(json.load(handle)["findings"])
+        stages.append(
+            VerifyStage(
+                "findings_json",
+                True,
+                f"{findings_count} findings match raw recompute",
+            )
+        )
+
+    figure_errors = _verify_png_figures(consolidated_path, findings_path, figures_dir)
+    if figure_errors:
+        stages.append(
+            VerifyStage(
+                "figures_png",
+                False,
+                f"{len(figure_errors)} mismatch(es): " + "; ".join(figure_errors[:3]),
+            )
+        )
+    else:
+        stages.append(
+            VerifyStage(
+                "figures_png",
+                True,
+                f"{len(FIGURE_OUTPUTS)} PNG files match regenerated output",
+            )
+        )
+    return stages
+
+
+def format_verify_all_summary(stages: Sequence[VerifyStage]) -> str:
+    overall = "PASS" if all(stage.passed for stage in stages) else "FAIL"
+    lines = [f"report all: {overall}"]
+    for stage in stages:
+        status = "PASS" if stage.passed else "FAIL"
+        lines.append(f"- {stage.name}: {status} — {stage.detail}")
+    return "\n".join(lines)
+
+
+def _verify_png_figures(
+    consolidated_path: Path,
+    findings_path: Path,
+    figures_dir: Path,
+) -> list[str]:
+    errors: list[str] = []
+    with tempfile.TemporaryDirectory(prefix="agent-authz-figures-") as tmp:
+        tmp_dir = Path(tmp)
+        generate_figures(consolidated_path, findings_path, tmp_dir)
+        for stem in FIGURE_OUTPUTS:
+            expected = figures_dir / f"{stem}.png"
+            actual = tmp_dir / f"{stem}.png"
+            if not expected.exists():
+                errors.append(f"{expected} is missing")
+                continue
+            if not actual.exists():
+                errors.append(f"{actual.name} was not regenerated")
+                continue
+            expected_bytes = expected.read_bytes()
+            actual_bytes = actual.read_bytes()
+            if expected_bytes != actual_bytes:
+                errors.append(
+                    f"{expected.name} differs "
+                    f"(committed={len(expected_bytes)} bytes, "
+                    f"regenerated={len(actual_bytes)} bytes)"
+                )
+    return errors
 
 
 def _validate_figure_inputs(findings: Any) -> None:
@@ -1494,6 +1611,14 @@ def _build_parser() -> argparse.ArgumentParser:
     figures_parser.add_argument("--csv", default=CONSOLIDATED_OUTPUT)
     figures_parser.add_argument("--findings", default=FINDINGS_OUTPUT)
     figures_parser.add_argument("--output-dir", default=FIGURES_OUTPUT_DIR)
+
+    all_parser = subparsers.add_parser(
+        "all", help="verify the complete raw-to-report artifact chain"
+    )
+    all_parser.add_argument("--raw-dir", default="results/raw")
+    all_parser.add_argument("--csv", default=CONSOLIDATED_OUTPUT)
+    all_parser.add_argument("--findings", default=FINDINGS_OUTPUT)
+    all_parser.add_argument("--figures-dir", default=FIGURES_OUTPUT_DIR)
     return parser
 
 
@@ -1551,6 +1676,16 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(f"wrote {len(paths)} figure files to {Path(args.output_dir)}")
         return 0
+
+    if args.command == "all":
+        stages = verify_all_artifacts(
+            Path(args.raw_dir),
+            Path(args.csv),
+            Path(args.findings),
+            Path(args.figures_dir),
+        )
+        print(format_verify_all_summary(stages))
+        return 0 if all(stage.passed for stage in stages) else 2
 
     parser.error(f"unsupported command: {args.command}")
     return 2
