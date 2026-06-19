@@ -7,6 +7,7 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Kelechi Michael Uba" }]
 dependencies = [
+  "matplotlib==3.11.0",
   "pyyaml>=6.0.2",
 ]
 
