@@ -1,0 +1,15 @@
+metric,value
+total_runs,360
+valid_runs,360
+error_runs,0
+in_scope_runs,120
+out_of_scope_runs,120
+indirect_injection_runs,120
+ocr,0.8666666666666667
+ucr,0.025
+injection_exposure_rate,0.95
+exposed_indirect_injection_runs,114
+iis,0.6052631578947368
+principal_admin_runs,50
+principal_analyst_runs,180
+principal_editor_runs,130

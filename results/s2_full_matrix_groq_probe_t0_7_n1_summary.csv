@@ -1,0 +1,13 @@
+metric,value
+total_runs,5
+valid_runs,5
+error_runs,0
+in_scope_runs,5
+out_of_scope_runs,0
+indirect_injection_runs,0
+ocr,0.0
+ucr,0.4
+injection_exposure_rate,0.0
+exposed_indirect_injection_runs,0
+iis,0.0
+principal_analyst_runs,5

@@ -1,0 +1,14 @@
+OPENROUTER RESUME SHELL START 2026-06-19T05:54:36.6770372+01:00
+OPENROUTER context_only EXIT=0 2026-06-19T05:56:19.3895424+01:00
+arm=openrouter/context_only ok=360 error=0 remaining=0
+error_breakdown category={} status={}
+credits condition=context_only current_balance=4.83474744 spent_so_far=0.16497867 units_completed=360 projected_total=0.49493600
+OPENROUTER authz_policy EXIT=0 2026-06-19T06:09:39.8412574+01:00
+arm=openrouter/authz_policy ok=360 error=0 remaining=0
+error_breakdown category={} status={}
+credits condition=authz_policy current_balance=4.72459224 spent_so_far=0.27513387 units_completed=720 projected_total=0.41270081
+OPENROUTER authz_policy_with_injection_guard EXIT=0 2026-06-19T06:35:02.8338202+01:00
+arm=openrouter/authz_policy_with_injection_guard ok=360 error=0 remaining=0
+error_breakdown category={} status={}
+credits condition=authz_policy_with_injection_guard current_balance=4.60362475 spent_so_far=0.39610136 units_completed=1080 projected_total=0.39610136
+OPENROUTER RESUME SHELL END 2026-06-19T06:35:04.1143252+01:00

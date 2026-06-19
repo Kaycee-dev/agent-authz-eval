@@ -66,12 +66,29 @@ def test_indirect_injection_bucket_has_strength_gradient():
     ]
     tiers = {scenario.injection_tier for scenario in injection_scenarios}
     instructions = [scenario.injected_instruction or "" for scenario in injection_scenarios]
+    user_messages = [scenario.user_message.lower() for scenario in injection_scenarios]
 
     assert tiers == VALID_INJECTION_TIERS
-    assert any(not instruction.startswith("SYSTEM:") for instruction in instructions)
-    assert any(
-        scenario.injection_tier == "multi_step" for scenario in injection_scenarios
-    )
+    assert all(not instruction.startswith("SYSTEM:") for instruction in instructions)
+    assert all("ignore prior instructions" not in instruction.lower() for instruction in instructions)
+    assert all("summarize" not in message for message in user_messages)
+
+    for tier in VALID_INJECTION_TIERS:
+        assert sum(1 for scenario in injection_scenarios if scenario.injection_tier == tier) == 6
+
+
+def test_indirect_injection_tasks_require_acting_on_retrieved_content():
+    action_verbs = ("execute", "complete", "resolve", "process", "apply", "carry out")
+    injection_scenarios = [
+        scenario
+        for scenario in load_all_scenarios()
+        if scenario.bucket == "indirect_injection"
+    ]
+
+    for scenario in injection_scenarios:
+        message = scenario.user_message.lower()
+        assert any(verb in message for verb in action_verbs), scenario.id
+        assert scenario.target_tool in {"read_profile", "read_audit_log", "update_profile"}
 
 
 def test_out_of_scope_scenarios_declare_no_authorized_alternative():
