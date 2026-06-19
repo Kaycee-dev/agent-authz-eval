@@ -4,6 +4,7 @@ import csv
 import json
 import math
 import re
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from agent_authz_eval.report import (
@@ -391,6 +392,107 @@ def test_f1_values_include_openrouter_authz_policy_ocr(tmp_path):
     value = document["findings"][0]["values"]["openrouter_authz_policy"]["ocr"]
 
     assert value == {"numerator": 1, "denominator": 1, "rate": 1.0}
+
+
+def test_figures_cli_produces_all_expected_files(tmp_path):
+    _, csv_path, findings_path = _write_findings_fixture(tmp_path)
+    output_dir = tmp_path / "figures"
+
+    exit_code = main(
+        [
+            "figures",
+            "--csv",
+            str(csv_path),
+            "--findings",
+            str(findings_path),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    assert sorted(path.name for path in output_dir.iterdir()) == sorted(
+        [
+            "headline_metrics_by_condition.png",
+            "headline_metrics_by_condition.svg",
+            "per_tier_iis_heatmap.png",
+            "per_tier_iis_heatmap.svg",
+            "open_weights_ocr_iis_divergence.png",
+            "open_weights_ocr_iis_divergence.svg",
+        ]
+    )
+
+
+def test_generated_svg_files_parse_as_xml(tmp_path):
+    _, csv_path, findings_path = _write_findings_fixture(tmp_path)
+    output_dir = tmp_path / "figures"
+    main(
+        [
+            "figures",
+            "--csv",
+            str(csv_path),
+            "--findings",
+            str(findings_path),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    for svg_path in output_dir.glob("*.svg"):
+        ET.parse(svg_path)
+
+
+def test_generated_png_files_have_png_magic_bytes(tmp_path):
+    _, csv_path, findings_path = _write_findings_fixture(tmp_path)
+    output_dir = tmp_path / "figures"
+    main(
+        [
+            "figures",
+            "--csv",
+            str(csv_path),
+            "--findings",
+            str(findings_path),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    for png_path in output_dir.glob("*.png"):
+        assert png_path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_generated_svgs_contain_expected_titles_and_labels(tmp_path):
+    _, csv_path, findings_path = _write_findings_fixture(tmp_path)
+    output_dir = tmp_path / "figures"
+    main(
+        [
+            "figures",
+            "--csv",
+            str(csv_path),
+            "--findings",
+            str(findings_path),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    headline = (output_dir / "headline_metrics_by_condition.svg").read_text(encoding="utf-8")
+    heatmap = (output_dir / "per_tier_iis_heatmap.svg").read_text(encoding="utf-8")
+    divergence = (output_dir / "open_weights_ocr_iis_divergence.svg").read_text(
+        encoding="utf-8"
+    )
+    assert "Authorization Behavior Across Models and System-Prompt Conditions" in headline
+    assert "Over-Compliance Rate" in headline
+    assert "OpenAI gpt-4.1-mini" in headline
+    assert "Per-Tier Indirect Injection Susceptibility" in heatmap
+    assert "OpenRouter Llama 3.3 70B" in heatmap
+    assert "Injection tier" in heatmap
+    assert (
+        "Open-Weights Divergence: Safeguards Increase Direct Over-Compliance "
+        "While Eliminating Indirect Injection Susceptibility"
+    ) in divergence
+    assert "OCR rate" in divergence
+    assert "IIS rate" in divergence
 
 
 def _row_by_metric(rows, metric):

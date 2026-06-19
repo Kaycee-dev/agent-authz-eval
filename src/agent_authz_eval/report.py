@@ -9,7 +9,7 @@ import statistics
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Sequence
 
 from agent_authz_eval.runner import load_jsonl_records
 
@@ -43,12 +43,40 @@ METRIC_ORDER = (
     "exposure_rate",
     "error_runs",
 )
+FIGURE_OUTPUTS = (
+    "headline_metrics_by_condition",
+    "per_tier_iis_heatmap",
+    "open_weights_ocr_iis_divergence",
+)
 IIS_TIERS = (
     ("iis_overt_instruction", "overt_instruction"),
     ("iis_buried_multi_step", "buried_multi_step"),
     ("iis_protocol_spoof", "protocol_spoof"),
     ("iis_task_conflation", "task_conflation"),
 )
+TIER_ORDER = tuple(tier for _, tier in IIS_TIERS)
+
+MODEL_LABELS = {
+    "openai": "OpenAI gpt-4.1-mini",
+    "anthropic": "Anthropic Claude Haiku 4.5",
+    "openrouter": "OpenRouter Llama 3.3 70B",
+}
+CONDITION_LABELS = {
+    "context_only": "context_only",
+    "authz_policy": "authz_policy",
+    "authz_policy_with_injection_guard": "authz_policy_with_injection_guard",
+}
+TIER_LABELS = {
+    "overt_instruction": "overt_instruction",
+    "buried_multi_step": "buried_multi_step",
+    "protocol_spoof": "protocol_spoof",
+    "task_conflation": "task_conflation",
+}
+MODEL_COLORS = {
+    "openai": "#0072B2",
+    "anthropic": "#009E73",
+    "openrouter": "#CC79A7",
+}
 
 UCR_NOTE = (
     "UCR reported without scenario exclusion; see docs/METHODOLOGY.md "
@@ -61,6 +89,7 @@ OPENROUTER_NOTE = (
 
 FINDINGS_VERSION = "1.0"
 FINDINGS_OUTPUT = "results/findings.json"
+FIGURES_OUTPUT_DIR = "results/figures"
 CONSOLIDATED_OUTPUT = "results/s2_consolidated.csv"
 RAW_SOURCE_PATTERN = "results/raw/s2_full_matrix_*_t0_7_n5.jsonl"
 GROQ_EXCLUDED_RAW = "results/raw/s2_full_matrix_groq_context_only_t0_7_n5.jsonl"
@@ -545,6 +574,292 @@ def verify_findings_json(
     expected = build_findings_document(raw_dir, expected_rows)
     errors.extend(_compare_findings_document(expected, actual))
     return errors
+
+
+def generate_figures(
+    consolidated_path: Path,
+    findings_path: Path,
+    output_dir: Path,
+) -> list[Path]:
+    rows = read_consolidated_csv(consolidated_path)
+    with findings_path.open("r", encoding="utf-8") as handle:
+        findings = json.load(handle)
+    _validate_figure_inputs(findings)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    row_index = {_row_key(row): row for row in rows}
+    written: list[Path] = []
+    written.extend(_plot_headline_metrics(row_index, output_dir))
+    written.extend(_plot_per_tier_heatmap(row_index, output_dir))
+    written.extend(_plot_open_weights_divergence(row_index, output_dir))
+    return written
+
+
+def _validate_figure_inputs(findings: Any) -> None:
+    if not isinstance(findings, dict):
+        raise ValueError("findings.json must contain a JSON object")
+    finding_ids = {
+        finding.get("id")
+        for finding in findings.get("findings", [])
+        if isinstance(finding, dict)
+    }
+    required = {"F1", "F2"}
+    missing = sorted(required - finding_ids)
+    if missing:
+        raise ValueError(f"findings.json is missing figure-critical findings: {missing}")
+
+
+def _plot_headline_metrics(
+    rows: dict[tuple[str, str], ConsolidatedRow],
+    output_dir: Path,
+) -> list[Path]:
+    plt = _prepare_matplotlib()
+    metrics = (
+        ("ocr", "Over-Compliance Rate"),
+        ("ucr", "Under-Compliance Rate (no exclusion)"),
+        ("iis_exposure_conditioned", "Indirect Injection Susceptibility (exposure-conditioned)"),
+    )
+    x_values = list(range(len(CONDITION_ORDER)))
+    fig, axes = plt.subplots(
+        nrows=3,
+        ncols=1,
+        figsize=(9.0, 10.5),
+        sharex=True,
+        constrained_layout=True,
+    )
+    fig.suptitle(
+        "Authorization Behavior Across Models and System-Prompt Conditions",
+        fontsize=15,
+        fontweight="bold",
+    )
+    for axis, (metric, title) in zip(axes, metrics):
+        for model in MODEL_ORDER:
+            y_values = [
+                _rate_for(rows[(f"{model}_{condition}", metric)])
+                for condition in CONDITION_ORDER
+            ]
+            y_errors = [
+                rows[(f"{model}_{condition}", metric)].spread or 0.0
+                for condition in CONDITION_ORDER
+            ]
+            axis.errorbar(
+                x_values,
+                y_values,
+                yerr=y_errors,
+                marker="o",
+                linewidth=2.0,
+                capsize=4,
+                color=MODEL_COLORS[model],
+                label=MODEL_LABELS[model],
+            )
+        axis.set_title(title, loc="left", fontsize=12, fontweight="bold")
+        axis.set_ylabel("Rate")
+        axis.set_ylim(-0.03, 1.03)
+        axis.grid(True, axis="y", alpha=0.25)
+    axes[0].legend(loc="upper right", frameon=False)
+    axes[-1].set_xticks(x_values)
+    axes[-1].set_xticklabels([CONDITION_LABELS[condition] for condition in CONDITION_ORDER])
+    axes[-1].set_xlabel("System-prompt condition")
+    return _save_figure(fig, output_dir / "headline_metrics_by_condition")
+
+
+def _plot_per_tier_heatmap(
+    rows: dict[tuple[str, str], ConsolidatedRow],
+    output_dir: Path,
+) -> list[Path]:
+    plt = _prepare_matplotlib()
+    fig, axes = plt.subplots(
+        nrows=1,
+        ncols=3,
+        figsize=(16.0, 6.4),
+        constrained_layout=True,
+    )
+    fig.suptitle(
+        "Per-Tier Indirect Injection Susceptibility",
+        fontsize=15,
+        fontweight="bold",
+    )
+    image = None
+    for axis, model in zip(axes, MODEL_ORDER):
+        matrix: list[list[float]] = []
+        annotations: list[list[str]] = []
+        for condition in CONDITION_ORDER:
+            rate_row: list[float] = []
+            annotation_row: list[str] = []
+            for metric, _tier in IIS_TIERS:
+                row = rows[(f"{model}_{condition}", metric)]
+                rate = _rate_for(row)
+                rate_row.append(rate)
+                annotation_row.append(
+                    f"{rate:.2f}\n({row.numerator or 0}/{row.denominator or 0})"
+                )
+            matrix.append(rate_row)
+            annotations.append(annotation_row)
+        image = axis.imshow(matrix, vmin=0.0, vmax=1.0, cmap="viridis", aspect="auto")
+        axis.set_title(MODEL_LABELS[model], fontsize=10, fontweight="bold")
+        axis.set_xticks(range(len(TIER_ORDER)))
+        axis.set_xticklabels([TIER_LABELS[tier] for tier in TIER_ORDER], rotation=35, ha="right")
+        axis.set_yticks(range(len(CONDITION_ORDER)))
+        axis.set_yticklabels([CONDITION_LABELS[condition] for condition in CONDITION_ORDER])
+        axis.set_xlabel("Injection tier")
+        if model == MODEL_ORDER[0]:
+            axis.set_ylabel("Condition")
+        for row_index, annotation_row in enumerate(annotations):
+            for column_index, text in enumerate(annotation_row):
+                rate = matrix[row_index][column_index]
+                axis.text(
+                    column_index,
+                    row_index,
+                    text,
+                    ha="center",
+                    va="center",
+                    fontsize=7,
+                    linespacing=1.15,
+                    color="white" if rate > 0.55 else "black",
+                )
+    assert image is not None
+    colorbar = fig.colorbar(image, ax=axes.ravel().tolist(), shrink=0.82)
+    colorbar.set_label("IIS rate")
+    return _save_figure(fig, output_dir / "per_tier_iis_heatmap")
+
+
+def _plot_open_weights_divergence(
+    rows: dict[tuple[str, str], ConsolidatedRow],
+    output_dir: Path,
+) -> list[Path]:
+    plt = _prepare_matplotlib()
+    x_values = list(range(len(CONDITION_ORDER)))
+    fig, left_axis = plt.subplots(figsize=(10.5, 5.8), constrained_layout=True)
+    right_axis = left_axis.twinx()
+    title = (
+        "Open-Weights Divergence: Safeguards Increase Direct Over-Compliance "
+        "While Eliminating Indirect Injection Susceptibility"
+    )
+    left_axis.set_title(title, fontsize=11, fontweight="bold", pad=14)
+
+    openrouter_ocr = _metric_series(rows, "openrouter", "ocr")
+    openrouter_iis = _metric_series(rows, "openrouter", "iis_exposure_conditioned")
+    left_axis.plot(
+        x_values,
+        openrouter_ocr,
+        marker="o",
+        linewidth=3.0,
+        color="#D55E00",
+        label="OpenRouter OCR",
+        zorder=4,
+    )
+    right_axis.plot(
+        x_values,
+        openrouter_iis,
+        marker="s",
+        linewidth=3.0,
+        color="#0072B2",
+        label="OpenRouter IIS",
+        zorder=4,
+    )
+
+    for model in ("openai", "anthropic"):
+        left_axis.plot(
+            x_values,
+            _metric_series(rows, model, "ocr"),
+            linestyle="--",
+            marker="o",
+            linewidth=1.3,
+            color="#7A7A7A",
+            alpha=0.65,
+            label=f"{MODEL_LABELS[model]} OCR",
+        )
+        right_axis.plot(
+            x_values,
+            _metric_series(rows, model, "iis_exposure_conditioned"),
+            linestyle=":",
+            marker="s",
+            linewidth=1.5,
+            color="#A0A0A0",
+            alpha=0.75,
+            label=f"{MODEL_LABELS[model]} IIS",
+        )
+
+    left_axis.annotate(
+        "OpenRouter divergence:\nOCR up, IIS down",
+        xy=(1, openrouter_ocr[1]),
+        xytext=(1.18, 0.78),
+        arrowprops={"arrowstyle": "->", "color": "#444444", "linewidth": 1.2},
+        fontsize=9,
+        ha="left",
+        va="center",
+    )
+    left_axis.set_xticks(x_values)
+    left_axis.set_xticklabels([CONDITION_LABELS[condition] for condition in CONDITION_ORDER])
+    left_axis.set_xlabel("System-prompt condition")
+    left_axis.set_ylabel("OCR rate")
+    right_axis.set_ylabel("IIS rate")
+    left_axis.set_ylim(-0.03, 1.03)
+    right_axis.set_ylim(-0.03, 1.03)
+    left_axis.grid(True, axis="y", alpha=0.25)
+    left_handles, left_labels = left_axis.get_legend_handles_labels()
+    right_handles, right_labels = right_axis.get_legend_handles_labels()
+    left_axis.legend(
+        left_handles + right_handles,
+        left_labels + right_labels,
+        loc="lower left",
+        frameon=False,
+        fontsize=8,
+    )
+    return _save_figure(fig, output_dir / "open_weights_ocr_iis_divergence")
+
+
+def _prepare_matplotlib() -> Any:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from matplotlib import pyplot as plt
+
+    plt.rcParams.update(
+        {
+            "font.family": "DejaVu Sans",
+            "font.size": 9,
+            "savefig.dpi": 300,
+            "svg.fonttype": "none",
+            "svg.hashsalt": "agent-authz-eval-s3-g3",
+        }
+    )
+    return plt
+
+
+def _save_figure(figure: Any, base_path: Path) -> list[Path]:
+    svg_path = base_path.with_suffix(".svg")
+    png_path = base_path.with_suffix(".png")
+    metadata = {"Date": None}
+    figure.savefig(
+        svg_path,
+        format="svg",
+        metadata=metadata,
+        bbox_inches="tight",
+        pad_inches=0.25,
+    )
+    figure.savefig(
+        png_path,
+        format="png",
+        dpi=300,
+        metadata=metadata,
+        bbox_inches="tight",
+        pad_inches=0.25,
+    )
+    _prepare_matplotlib().close(figure)
+    return [svg_path, png_path]
+
+
+def _rate_for(row: ConsolidatedRow) -> float:
+    return float(row.rate) if row.rate is not None else 0.0
+
+
+def _metric_series(
+    rows: dict[tuple[str, str], ConsolidatedRow],
+    model: str,
+    metric: str,
+) -> list[float]:
+    return [_rate_for(rows[(f"{model}_{condition}", metric)]) for condition in CONDITION_ORDER]
 
 
 def _finding(
@@ -1172,6 +1487,13 @@ def _build_parser() -> argparse.ArgumentParser:
     verify_findings_parser.add_argument("--raw-dir", default="results/raw")
     verify_findings_parser.add_argument("--csv", default=CONSOLIDATED_OUTPUT)
     verify_findings_parser.add_argument("--input", default=FINDINGS_OUTPUT)
+
+    figures_parser = subparsers.add_parser(
+        "figures", help="write SVG and PNG figures from CSV and findings JSON"
+    )
+    figures_parser.add_argument("--csv", default=CONSOLIDATED_OUTPUT)
+    figures_parser.add_argument("--findings", default=FINDINGS_OUTPUT)
+    figures_parser.add_argument("--output-dir", default=FIGURES_OUTPUT_DIR)
     return parser
 
 
@@ -1219,6 +1541,15 @@ def main(argv: list[str] | None = None) -> int:
                 print(error)
             return 2
         print("verify-findings passed: 8 findings, all values match raw")
+        return 0
+
+    if args.command == "figures":
+        paths = generate_figures(
+            Path(args.csv),
+            Path(args.findings),
+            Path(args.output_dir),
+        )
+        print(f"wrote {len(paths)} figure files to {Path(args.output_dir)}")
         return 0
 
     parser.error(f"unsupported command: {args.command}")
