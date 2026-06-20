@@ -32,5 +32,7 @@ python -m agent_authz_eval.report all
 ```
 
 The verifier recomputes `results/s2_consolidated.csv` from raw JSONL records,
-re-derives `results/findings.json`, regenerates the PNG figures in a temporary
-directory, and compares the regenerated artifacts against the committed files.
+re-derives `results/findings.json`, regenerates the figure artifacts in a
+temporary directory, confirms the PNG/SVG render outputs are valid, and verifies
+that the underlying plotted rates and counts match the committed CSV and
+findings data.

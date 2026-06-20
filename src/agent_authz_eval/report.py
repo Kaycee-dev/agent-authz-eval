@@ -7,6 +7,7 @@ import csv
 import json
 import statistics
 import tempfile
+import xml.etree.ElementTree as ET
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,6 +50,9 @@ FIGURE_OUTPUTS = (
     "per_tier_iis_heatmap",
     "open_weights_ocr_iis_divergence",
 )
+FIGURE_FILE_SUFFIXES = (".svg", ".png")
+MIN_RENDERED_FIGURE_BYTES = 1024
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 IIS_TIERS = (
     ("iis_overt_instruction", "overt_instruction"),
     ("iis_buried_multi_step", "buried_multi_step"),
@@ -250,6 +254,29 @@ class VerifyStage:
     name: str
     passed: bool
     detail: str
+
+
+@dataclass(frozen=True)
+class FigureDataPoint:
+    figure: str
+    arm: str
+    metric: str
+    model_label: str
+    condition_label: str
+    metric_label: str
+    numerator: int | None
+    denominator: int | None
+    rate: float | None
+    plotted_rate: float
+    spread: float | None
+    tier_label: str | None = None
+
+
+@dataclass(frozen=True)
+class FigureVerification:
+    errors: list[str]
+    data_points: int
+    finding_values_checked: int
 
 
 def matrix_raw_paths(raw_dir: Path) -> list[Path]:
@@ -654,21 +681,28 @@ def verify_all_artifacts(
             )
         )
 
-    figure_errors = _verify_png_figures(consolidated_path, findings_path, figures_dir)
-    if figure_errors:
+    figure_verification = _verify_figure_data(
+        consolidated_path,
+        findings_path,
+        figures_dir,
+    )
+    if figure_verification.errors:
         stages.append(
             VerifyStage(
-                "figures_png",
+                "figures_data",
                 False,
-                f"{len(figure_errors)} mismatch(es): " + "; ".join(figure_errors[:3]),
+                f"{len(figure_verification.errors)} mismatch(es): "
+                + "; ".join(figure_verification.errors[:3]),
             )
         )
     else:
         stages.append(
             VerifyStage(
-                "figures_png",
+                "figures_data",
                 True,
-                f"{len(FIGURE_OUTPUTS)} PNG files match regenerated output",
+                f"{len(FIGURE_OUTPUTS)} figures render as valid PNG/SVG; "
+                f"{figure_verification.data_points} plotted data points match CSV; "
+                f"{figure_verification.finding_values_checked} finding values match plotted data",
             )
         )
     return stages
@@ -683,32 +717,260 @@ def format_verify_all_summary(stages: Sequence[VerifyStage]) -> str:
     return "\n".join(lines)
 
 
-def _verify_png_figures(
+def _verify_figure_data(
     consolidated_path: Path,
     findings_path: Path,
     figures_dir: Path,
-) -> list[str]:
+) -> FigureVerification:
     errors: list[str] = []
+    rows = read_consolidated_csv(consolidated_path)
+    row_index = {_row_key(row): row for row in rows}
+
+    with findings_path.open("r", encoding="utf-8") as handle:
+        findings = json.load(handle)
+    try:
+        _validate_figure_inputs(findings)
+    except ValueError as exc:
+        errors.append(str(exc))
+
+    data_points, data_errors = _build_figure_data_points(row_index)
+    errors.extend(data_errors)
+    finding_errors, finding_checks = _verify_finding_values_for_figure_data(
+        findings,
+        data_points,
+    )
+    errors.extend(finding_errors)
+
     with tempfile.TemporaryDirectory(prefix="agent-authz-figures-") as tmp:
         tmp_dir = Path(tmp)
-        generate_figures(consolidated_path, findings_path, tmp_dir)
-        for stem in FIGURE_OUTPUTS:
-            expected = figures_dir / f"{stem}.png"
-            actual = tmp_dir / f"{stem}.png"
-            if not expected.exists():
-                errors.append(f"{expected} is missing")
-                continue
-            if not actual.exists():
-                errors.append(f"{actual.name} was not regenerated")
-                continue
-            expected_bytes = expected.read_bytes()
-            actual_bytes = actual.read_bytes()
-            if expected_bytes != actual_bytes:
+        try:
+            written = generate_figures(consolidated_path, findings_path, tmp_dir)
+        except Exception as exc:  # pragma: no cover - defensive verifier reporting
+            errors.append(f"figure regeneration failed: {exc}")
+        else:
+            if len(written) != len(FIGURE_OUTPUTS) * len(FIGURE_FILE_SUFFIXES):
                 errors.append(
-                    f"{expected.name} differs "
-                    f"(committed={len(expected_bytes)} bytes, "
-                    f"regenerated={len(actual_bytes)} bytes)"
+                    "figure regeneration wrote "
+                    f"{len(written)} files, expected "
+                    f"{len(FIGURE_OUTPUTS) * len(FIGURE_FILE_SUFFIXES)}"
                 )
+            errors.extend(_verify_rendered_figure_files(tmp_dir, "regenerated"))
+
+    errors.extend(_verify_rendered_figure_files(figures_dir, "committed"))
+    return FigureVerification(errors, len(data_points), finding_checks)
+
+
+def _build_figure_data_points(
+    rows: dict[tuple[str, str], ConsolidatedRow],
+) -> tuple[list[FigureDataPoint], list[str]]:
+    data_points: list[FigureDataPoint] = []
+    errors: list[str] = []
+
+    headline_metrics = (
+        ("ocr", "Over-Compliance Rate"),
+        ("ucr", "Under-Compliance Rate (no exclusion)"),
+        ("iis_exposure_conditioned", "Indirect Injection Susceptibility (exposure-conditioned)"),
+    )
+    for metric, metric_label in headline_metrics:
+        for model in MODEL_ORDER:
+            for condition in CONDITION_ORDER:
+                _append_figure_data_point(
+                    data_points,
+                    errors,
+                    rows,
+                    figure="headline_metrics_by_condition",
+                    model=model,
+                    condition=condition,
+                    metric=metric,
+                    metric_label=metric_label,
+                )
+
+    for model in MODEL_ORDER:
+        for condition in CONDITION_ORDER:
+            for metric, tier in IIS_TIERS:
+                _append_figure_data_point(
+                    data_points,
+                    errors,
+                    rows,
+                    figure="per_tier_iis_heatmap",
+                    model=model,
+                    condition=condition,
+                    metric=metric,
+                    metric_label="Per-tier Indirect Injection Susceptibility",
+                    tier=tier,
+                )
+
+    for metric, metric_label in (
+        ("ocr", "OCR rate"),
+        ("iis_exposure_conditioned", "IIS rate"),
+    ):
+        for model in MODEL_ORDER:
+            for condition in CONDITION_ORDER:
+                _append_figure_data_point(
+                    data_points,
+                    errors,
+                    rows,
+                    figure="open_weights_ocr_iis_divergence",
+                    model=model,
+                    condition=condition,
+                    metric=metric,
+                    metric_label=metric_label,
+                )
+
+    expected_counts = {
+        "headline_metrics_by_condition": 27,
+        "per_tier_iis_heatmap": 36,
+        "open_weights_ocr_iis_divergence": 18,
+    }
+    for figure, expected_count in expected_counts.items():
+        actual_count = sum(1 for point in data_points if point.figure == figure)
+        if actual_count != expected_count:
+            errors.append(
+                f"{figure} has {actual_count} plotted data points, "
+                f"expected {expected_count}"
+            )
+    return data_points, errors
+
+
+def _append_figure_data_point(
+    data_points: list[FigureDataPoint],
+    errors: list[str],
+    rows: dict[tuple[str, str], ConsolidatedRow],
+    *,
+    figure: str,
+    model: str,
+    condition: str,
+    metric: str,
+    metric_label: str,
+    tier: str | None = None,
+) -> None:
+    arm = f"{model}_{condition}"
+    row = rows.get((arm, metric))
+    if row is None:
+        errors.append(f"{figure} missing CSV row for {arm}/{metric}")
+        return
+    data_points.append(
+        FigureDataPoint(
+            figure=figure,
+            arm=arm,
+            metric=metric,
+            model_label=MODEL_LABELS[model],
+            condition_label=CONDITION_LABELS[condition],
+            metric_label=metric_label,
+            numerator=row.numerator,
+            denominator=row.denominator,
+            rate=row.rate,
+            plotted_rate=_rate_for(row),
+            spread=row.spread,
+            tier_label=TIER_LABELS[tier] if tier else None,
+        )
+    )
+
+
+def _verify_finding_values_for_figure_data(
+    findings: Any,
+    data_points: Sequence[FigureDataPoint],
+) -> tuple[list[str], int]:
+    errors: list[str] = []
+    point_by_row: dict[tuple[str, str], FigureDataPoint] = {}
+    for point in data_points:
+        point_by_row.setdefault((point.arm, point.metric), point)
+
+    checked = 0
+    for finding_id, arm, metric, value in _iter_finding_metric_values(findings):
+        point = point_by_row.get((arm, metric))
+        if point is None:
+            continue
+        checked += 1
+        errors.extend(_compare_finding_value_to_point(finding_id, point, value))
+
+    if checked == 0:
+        errors.append("no findings.json values overlapped the plotted figure data")
+    return errors, checked
+
+
+def _iter_finding_metric_values(
+    findings: Any,
+) -> Iterable[tuple[str, str, str, dict[str, Any]]]:
+    if not isinstance(findings, dict):
+        return
+    finding_items = findings.get("findings")
+    if not isinstance(finding_items, list):
+        return
+    for finding in finding_items:
+        if not isinstance(finding, dict):
+            continue
+        finding_id = str(finding.get("id", "<missing>"))
+        values = finding.get("values")
+        if not isinstance(values, dict):
+            continue
+        for arm, metrics in values.items():
+            if not isinstance(arm, str) or not isinstance(metrics, dict):
+                continue
+            for metric, value in metrics.items():
+                if isinstance(metric, str) and _is_metric_value(value):
+                    yield finding_id, arm, metric, value
+
+
+def _is_metric_value(value: Any) -> bool:
+    return (
+        isinstance(value, dict)
+        and {"numerator", "denominator", "rate"}.issubset(value.keys())
+    )
+
+
+def _compare_finding_value_to_point(
+    finding_id: str,
+    point: FigureDataPoint,
+    value: dict[str, Any],
+) -> list[str]:
+    errors: list[str] = []
+    expected = {
+        "numerator": point.numerator,
+        "denominator": point.denominator,
+        "rate": point.rate,
+    }
+    for field, expected_value in expected.items():
+        actual_value = value.get(field)
+        if _numbers_match(expected_value, actual_value) or actual_value == expected_value:
+            continue
+        errors.append(
+            f"{finding_id} {point.arm}/{point.metric} {field} mismatch: "
+            f"findings={actual_value!r} csv={expected_value!r}"
+        )
+    return errors
+
+
+def _verify_rendered_figure_files(figures_dir: Path, source_label: str) -> list[str]:
+    errors: list[str] = []
+    for stem in FIGURE_OUTPUTS:
+        for suffix in FIGURE_FILE_SUFFIXES:
+            path = figures_dir / f"{stem}{suffix}"
+            if not path.exists():
+                errors.append(f"{source_label} {path.name} is missing")
+                continue
+            try:
+                size = path.stat().st_size
+            except OSError as exc:
+                errors.append(f"{source_label} {path.name} is not readable: {exc}")
+                continue
+            if size < MIN_RENDERED_FIGURE_BYTES:
+                errors.append(
+                    f"{source_label} {path.name} is too small "
+                    f"({size} bytes, expected at least {MIN_RENDERED_FIGURE_BYTES})"
+                )
+                continue
+            if suffix == ".png":
+                if path.read_bytes()[: len(PNG_MAGIC)] != PNG_MAGIC:
+                    errors.append(f"{source_label} {path.name} is not a valid PNG")
+                continue
+            try:
+                root = ET.parse(path).getroot()
+            except ET.ParseError as exc:
+                errors.append(f"{source_label} {path.name} is not valid SVG XML: {exc}")
+                continue
+            if not root.tag.endswith("svg"):
+                errors.append(f"{source_label} {path.name} root element is not svg")
     return errors
 
 

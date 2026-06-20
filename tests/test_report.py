@@ -14,6 +14,7 @@ from agent_authz_eval.report import (
     consolidate,
     main,
     matrix_raw_paths,
+    verify_all_artifacts,
     verify_consolidated_csv,
     verify_findings_json,
     write_findings_json,
@@ -459,6 +460,30 @@ def test_generated_png_files_have_png_magic_bytes(tmp_path):
 
     for png_path in output_dir.glob("*.png"):
         assert png_path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_report_all_accepts_valid_figures_with_byte_drift(tmp_path):
+    raw_dir, csv_path, findings_path = _write_findings_fixture(tmp_path)
+    output_dir = tmp_path / "figures"
+    main(
+        [
+            "figures",
+            "--csv",
+            str(csv_path),
+            "--findings",
+            str(findings_path),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+    png_path = output_dir / "headline_metrics_by_condition.png"
+    png_path.write_bytes(png_path.read_bytes() + b"cross-platform-byte-drift")
+
+    stages = verify_all_artifacts(raw_dir, csv_path, findings_path, output_dir)
+    figure_stage = next(stage for stage in stages if stage.name == "figures_data")
+
+    assert figure_stage.passed
+    assert "plotted data points match CSV" in figure_stage.detail
 
 
 def test_generated_svgs_contain_expected_titles_and_labels(tmp_path):
