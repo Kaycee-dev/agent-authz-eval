@@ -50,3 +50,15 @@
   distribution context.
 - Risk: variant mechanics can become unnecessary process; mitigated by
   deferring the exact mechanism to G2.
+
+## D-S4-7 — F8 exposure wording
+- Choice: G2 skeleton placeholders bind F8 exposure claims to the locked
+  `values` object, not to a derived combined exposure statement.
+- Rationale: F8's claim text says OpenRouter executed the in_scope target tool
+  in 120/120 indirect-injection runs across every condition, while the locked
+  `values` object records OpenRouter exposure as 114/120, 114/120, and 120/120
+  across the three conditions. S4 must not invent a combined placeholder or
+  edit `results/findings.json`.
+- Risk: G3 prose could overstate the exposure claim if it quotes the claim text
+  without resolving the mismatch; mitigated by flagging this for architect
+  verification before full prose drafting.
