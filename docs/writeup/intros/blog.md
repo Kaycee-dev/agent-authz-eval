@@ -1,0 +1,5 @@
+# Blog Intro
+
+Tool-using LLM agents do not only need to know what tools exist; they need to preserve authorization boundaries while using them. This writeup summarizes a synthetic evaluation of that behavior across model deployments and system-prompt conditions. The most interesting result is not a single model ranking. It is the way behavior changes depending on deployment context, model identity, and safeguard layering.
+
+The study looks at direct unauthorized requests, indirect injection as a delegating-user / confused-deputy problem, and a destructive-action precondition that separates "can call this tool" from "should call it now." The findings show sharp differences: closed-frontier baselines diverge substantially, prompt-level safeguards have asymmetric value, and the open-weights row trades strong post-exposure injection resistance for high direct over-compliance and high exposure. The point is deliberately bounded: these are claims about a reproducible synthetic harness, not production behavior. The artifact is useful because every numerical claim is tied to a locked finding and review trail.
