@@ -1,6 +1,6 @@
 # S4 — Ship Check
 
-- [ ] All five gates closed and annotated-tagged (`gate-s4-g1` through
+- [x] All five gates closed and annotated-tagged (`gate-s4-g1` through
   `gate-s4-g5`, modulo `-2` versioned re-tags per immutability protocol).
 - [x] `docs/writeup/WRITEUP.md` exists, is ~5,000 words +/- 15%, and matches
   the SPEC section allocation.
@@ -19,6 +19,6 @@
   `WRITEUP.md` with figures rendered.
 - [x] Three distribution intro framings are present, using the mechanism chosen
   in D-S4-6.
-- [ ] Fresh-clone reproduction still works: clone main, run `report all`,
+- [x] Fresh-clone reproduction still works: clone main, run `report all`,
   exit 0.
-- [ ] PR description links the writeup file and references the `s4-merged` tag.
+- [x] PR description links the writeup file and references the `s4-merged` tag.
