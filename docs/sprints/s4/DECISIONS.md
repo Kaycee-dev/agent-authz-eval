@@ -62,3 +62,8 @@
 - Risk: G3 prose could overstate the exposure claim if it quotes the claim text
   without resolving the mismatch; mitigated by flagging this for architect
   verification before full prose drafting.
+- G3 resolution: the prose paraphrases F8's per-arm exposure values directly
+  from F8.values and does not reproduce the claim string. Findings.json remains
+  unmodified. The "How this was reviewed" section cites this as a worked
+  example of the gated-tagged process surfacing a contradiction in a locked
+  artifact.
