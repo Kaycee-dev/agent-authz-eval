@@ -50,6 +50,9 @@
   distribution context.
 - Risk: variant mechanics can become unnecessary process; mitigated by
   deferring the exact mechanism to G2.
+- G4 resolution: use separate channel intro files under `docs/writeup/intros/`
+  (`blog.md`, `readme.md`, `outreach.md`). Each intro is prepended or adapted
+  per channel while `docs/writeup/WRITEUP.md` remains the canonical body.
 
 ## D-S4-7 — F8 exposure wording
 - Choice: G2 skeleton placeholders bind F8 exposure claims to the locked
@@ -67,3 +70,16 @@
   unmodified. The "How this was reviewed" section cites this as a worked
   example of the gated-tagged process surfacing a contradiction in a locked
   artifact.
+
+## D-S4-8 — PDF export mechanics
+- Choice: `python scripts/build_writeup_pdf.py` is the canonical tested export
+  command; the `writeup-pdf` Makefile target is a convenience wrapper for
+  systems with make. The script renders `docs/writeup/WRITEUP.md` with pandoc
+  to standalone embedded HTML and prints `docs/writeup/WRITEUP.pdf` with
+  Chrome/Edge headless.
+- Rationale: pandoc remains the Markdown renderer required by D-S4-1, while
+  Chrome avoids adding a LaTeX dependency for the final PDF print step. The
+  generated PDF is committed because it is the outreach artifact and is small
+  enough for the repository.
+- Risk: the target requires pandoc plus Chrome or Edge; mitigated by clear
+  failure messages and by verifying the generated PDF during G4.

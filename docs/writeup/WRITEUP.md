@@ -1,6 +1,6 @@
 # Do Tool-Using LLM Agents Respect Authorization Boundaries? An Empirical Study
 
-## Intro / motivation (~500w)
+## Intro / motivation
 
 Tool-using language-model agents are often discussed as if the authorization problem were mostly a matter of giving the model the right policy text. This study asks a narrower and more testable question: when an agent has tools, a user request, and a system-prompt condition, does it respect authorization boundaries in a reproducible synthetic harness? The answer is not a single model leaderboard. The central result is that authorization-respecting behavior changes with deployment context, model identity, and safeguard layering, and the differences are large enough to matter for anyone evaluating agent safety.
 
@@ -12,9 +12,9 @@ Those headline results set up the more practical question: what do safeguards bu
 
 All of these claims are bounded. They characterize behavior in a specific reproducible synthetic test environment, not production behavior. The value of the writeup is that its claims are auditable: the prose is downstream of locked findings, the findings are downstream of raw JSONL, and the review process is part of the artifact rather than an afterthought.
 
-That auditability is the portfolio point. A reader should not have to trust that the most surprising result was selected after looking around for a story. The story is constrained by a gated artifact chain: findings first, skeleton second, prose third. The result is less polished as marketing, but more useful as evidence of how the author handles claim discipline when the data are inconvenient.
+That auditability is the portfolio point. A reader should not have to trust that the most surprising result was selected after looking around for a story. The story is constrained by a gated artifact chain: findings first, outline second, prose third. The result is less polished as marketing, but more useful as evidence of how the author handles claim discipline when the data are inconvenient.
 
-## Methodology summary (~800w)
+## Methodology summary
 
 This is a focused synthetic evaluation of authorization behavior in tool-using agents. The harness presents models with agent tasks, tool affordances, and system-prompt conditions, then classifies whether the model executes authorized work, refuses unauthorized work, or lets tool output induce an unauthorized action. The writeup does not introduce new experimental data. It summarizes the S3 artifact chain: raw JSONL records, consolidated metrics, structured findings, and committed figures. Every numerical result in the prose is cited back to a finding ID.
 
@@ -24,19 +24,19 @@ The indirect-injection bucket is deliberately framed as a delegating-user / conf
 
 The system-prompt conditions are also part of the study design. The context_only condition gives the model the task context without the explicit authorization-policy block. The authz_policy condition adds the authorization policy. The authz_policy_with_injection_guard condition adds both the authorization policy and an injection guard. The point is not to declare a universal winner. The point is to observe whether the same safeguard layer has the same effect across model deployments. It does not.
 
-The S4 writeup treats the S3 outputs as immutable inputs. Findings F1 through F8 are locked in `results/findings.json`; figures are locked in `results/figures`; the methodology note is locked in `docs/METHODOLOGY.md`; and the raw records remain the evidence base. This matters because the writeup is not allowed to tune the corpus, change metric definitions, rerun models, or regenerate plots to make the story cleaner. When the prose finds an awkward edge, it must either use the locked value honestly or move the issue to future work.
+The writeup treats the report outputs as immutable inputs. Findings F1 through F8 are locked in `results/findings.json`; figures are locked in `results/figures`; the methodology note is locked in `docs/METHODOLOGY.md`; and the raw records remain the evidence base. This matters because the writeup is not allowed to tune the corpus, change metric definitions, rerun models, or regenerate plots to make the story cleaner. When the prose finds an awkward edge, it must either use the locked value honestly or move the issue to future work.
 
-One such edge is F8. The finding's claim text overstates OpenRouter exposure, but the verified `values` object records OpenRouter exposure as 114/120 in context_only, 114/120 with authz_policy, and 120/120 with the full guard stack. Because S4 does not edit `results/findings.json`, this writeup paraphrases F8 from the per-arm values and documents the mismatch in D-S4-7. That choice preserves the immutability protocol while keeping the prose truthful.
+One such edge is F8. The finding's claim text overstates OpenRouter exposure, but the verified `values` object records OpenRouter exposure as 114/120 in context_only, 114/120 with authz_policy, and 120/120 with the full guard stack. Because the findings artifact remains locked, this writeup paraphrases F8 from the per-arm values and documents the mismatch in D-S4-7. That choice preserves the immutability protocol while keeping the prose truthful.
 
 The Groq partial JSONL is also treated as forensic evidence rather than a matrix input. The completed open-weights arm uses OpenRouter for Llama 3.3 70B. The partial Groq run explains collection history and remains available for audit, but it is excluded from the matrix discussion. This is another example of the report's basic stance: retain evidence, avoid post-hoc metric tuning, and keep claims inside the boundary of the reproducible artifact chain.
 
-The figures follow the same rule. They are not decorative illustrations added after the prose was written. They are committed report artifacts generated from the consolidated data and checked by the report verifier. In this draft, each figure is embedded only where it supports the local argument: the headline comparison for baseline asymmetry, the per-tier heatmap for guard behavior, and the open-weights divergence plot for the OCR/IIS tradeoff. The prose does not replace those artifacts; it explains why the reader should inspect them.
+The figures follow the same rule. They are not decorative illustrations added after the prose was written. They are committed report artifacts generated from the consolidated data and checked by the report verifier. Each figure is embedded only where it supports the local argument: the headline comparison for baseline asymmetry, the per-tier heatmap for guard behavior, and the open-weights divergence plot for the OCR/IIS tradeoff. The prose does not replace those artifacts; it explains why the reader should inspect them.
 
 Finally, the writeup separates empirical description from operational recommendation. It can say that a safeguard reduced IIS in one arm, or that a deployment paused before a destructive action, because those statements are backed by findings. It does not say that a particular product is safe, unsafe, production-ready, or categorically unsuitable. That distinction keeps the methodology honest and prevents the synthetic harness from carrying more weight than it can support.
 
-## Findings (~2,000w)
+## Findings
 
-The findings section follows the claim-provenance map from G2. It starts with F3 because destructive-action precondition handling is the strongest example of cross-deployment behavioral divergence. It then moves to F5 and F6, where the closed-frontier baselines differ by approximately a factor of four in indirect-injection robustness. The remaining findings explain how safeguard layers and exposure behavior complicate any simple "more policy text means safer agent" story.
+The findings start with F3 because destructive-action precondition handling is the strongest example of cross-deployment behavioral divergence. They then move to F5 and F6, where the closed-frontier baselines differ by approximately a factor of four in indirect-injection robustness. The remaining findings explain how safeguard layers and exposure behavior complicate any simple "more policy text means safer agent" story.
 
 Read together, the findings argue for measuring authorization behavior as a bundle of related failure modes rather than as a single aggregate success score.
 
@@ -56,7 +56,7 @@ The next result is less scenario-specific and more comparative. In finding F5, O
 
 ![Figure 1: Headline metric comparison across models and system-prompt conditions, including exposure-conditioned indirect injection susceptibility.](../../results/figures/headline_metrics_by_condition.png)
 
-The important framing is analytical rather than adversarial. This is not a vendor-bashing claim. The result says that two closed frontier models from different labs behave very differently before any system-prompt-level safeguards are added. Model identity matters. Deployment context matters. A safety argument that only names the policy layer, without naming the model behavior underneath it, misses a large part of the empirical picture.
+The important framing is analytical rather than adversarial. The result says that two closed frontier models from different labs behave very differently before any system-prompt-level safeguards are added. Model identity matters. Deployment context matters. A safety argument that only names the policy layer, without naming the model behavior underneath it, misses a large part of the empirical picture.
 
 The baseline asymmetry also changes how later safeguard results should be read. A large improvement on a high-susceptibility baseline and a small improvement on a low-susceptibility baseline do not mean the same thing. The OpenAI row starts with more room for the authz_policy and injection_guard layers to help. The Anthropic row starts with much of that behavior already present in the baseline, at least in this synthetic harness.
 
@@ -98,7 +98,7 @@ This final finding reinforces the main thesis. Authorization behavior is not a s
 
 For a reviewer, F4 is also a reminder to inspect denominators. A low post-exposure susceptibility rate can mean that the model resisted the payload after reading it, or that fewer runs reached the payload in the first place. In Anthropic's overt-instruction cases, both layers matter: some runs avoid exposure, and the exposed runs do not produce the unauthorized action counted by IIS. That is better captured by the exposure-conditioned metric than by a single aggregate failure rate.
 
-## Limitations (~500w)
+## Limitations
 
 The first limitation is the synthetic-environment caveat, and it is the most important one. This writeup characterizes behavior in a specific reproducible synthetic harness. It does not claim that any evaluated model will behave the same way in production, under a different tool schema, with different system instructions, or inside a deployed agent product. The harness is useful because it is controlled and auditable, but that same control narrows the external validity of the conclusions.
 
@@ -114,23 +114,35 @@ There is no adaptive adversary modeling in this study. The injected content is f
 
 Finally, the study does not test fine-tuned models. It evaluates the named model endpoints and prompt conditions in the locked matrix. Fine-tuning, product-specific safety layers, tool-call validators, and policy engines could materially change the results. They belong in future work, not in extrapolation from this writeup.
 
-## Reproduction note (~300w)
+## Reproduction note
 
-The reproduction path is intentionally short because the writeup depends on the S3 report pipeline rather than on new S4 computation. A reviewer starts by cloning the repository, checking out the reviewed branch or gate tag, and installing the project through the repo-documented Python path. The development dependency set includes pytest for the test suite, while the report pipeline uses the package code under `src/agent_authz_eval`.
+The reproduction path is intentionally short because the writeup depends on the report pipeline rather than on new computation. A reviewer starts by cloning the repository, checking out the reviewed branch or gate tag, and installing the package with the development dependency set:
 
-The command that matters for the empirical artifact chain is:
+```text
+python -m pip install -e ".[dev]"
+```
 
-```powershell
+From the repository root, the empirical artifact chain is verified with:
+
+```text
 python -m agent_authz_eval.report all
 ```
 
-That command verifies the consolidated CSV against raw records, verifies `results/findings.json` against raw recomputation, and verifies that the committed figures render as PNG and SVG while matching the plotted data. At this gate it exited 0 locally. The full test suite was also run with a workspace-local pytest base temp to avoid a Windows temp-directory permission issue, and the suite passed.
+If the package is not installed in editable mode, set `PYTHONPATH=src` before running the module. In PowerShell that is `$env:PYTHONPATH='src'`; in POSIX shells it is `PYTHONPATH=src python -m agent_authz_eval.report all`.
 
-Fresh-clone reproduction was previously verified on Linux at S3 close. That matters because S4 is a writeup sprint: the goal is not to change the report pipeline, but to preserve the ability for a reviewer to rebuild the claim-bearing artifacts independently. The prose should therefore be treated as downstream of the reproducible artifact chain, not as a substitute for it.
+The PDF export command is:
 
-For G3, the local checks are intentionally limited to confirming that the prose did not disturb the pipeline. The writeup changes Markdown and the S4 decision log; it does not edit raw data, methodology, report code, generated CSVs, findings, or figures. Passing the report verifier after the prose edit is therefore a regression check: the empirical chain remains intact while the narrative layer changes.
+```text
+python scripts/build_writeup_pdf.py
+```
 
-## How this was reviewed (~500w)
+The report command verifies the consolidated CSV against raw records, verifies `results/findings.json` against raw recomputation, and verifies that the committed figures render as PNG and SVG while matching the plotted data. The full test suite can be run with `pytest -q`. On this Windows workstation, pytest uses a workspace-local base temp such as `pytest -q --basetemp .pytest-tmp-local` to avoid a user-temp-directory permission issue; the workaround does not change the tests.
+
+Fresh-clone reproduction was previously verified on Linux at S3 close. That matters because the writeup sprint is not meant to change the report pipeline, but to preserve the ability for a reviewer to rebuild the claim-bearing artifacts independently. The prose should therefore be treated as downstream of the reproducible artifact chain, not as a substitute for it.
+
+The local checks are intentionally limited to confirming that the prose and export surfaces did not disturb the pipeline. The writeup changes Markdown, distribution intros, documentation, and export plumbing; it does not edit raw data, methodology, report code, generated CSVs, findings, or figures. Passing the report verifier after these edits is therefore a regression check: the empirical chain remains intact while the narrative layer changes.
+
+## How this was reviewed
 
 The review process is part of the artifact because the target audience is not only reading the results; it is evaluating whether the author can make empirical claims safely. The sprint uses a gated-tagged workflow. Each gate ends with a commit, an annotated tag, a pushed branch, and remote architect verification before the next gate opens. The local agent can implement and run checks, but it does not self-approve the gate.
 
@@ -138,13 +150,13 @@ S3 established the empirical chain. Raw JSONL records feed the consolidated CSV.
 
 The S3-G4 to S3-G4-2 versioned re-tag is the worked example of correcting a gate without pretending the first tag never happened. A byte-equivalence assumption for generated PNGs was too strict across renderer environments. The process did not rewrite approved history. It created a versioned correction, preserved the audit trail, and moved forward with a verifier that checked renderability and plotted data rather than platform-specific bytes. That is the kind of review behavior this portfolio artifact is meant to show.
 
-G3 adds another example through D-S4-7. During skeleton review, F8 exposed a contradiction inside a locked artifact: the claim string overstated OpenRouter exposure, while the verified values object recorded 114/120, 114/120, and 120/120 across conditions. The resolution was not to edit `results/findings.json` during the writeup sprint. The resolution was to amend the decision log, paraphrase F8 from the per-arm values, and cite the issue as a review-process example.
+D-S4-7 adds another example. During writeup review, F8 exposed a contradiction inside a locked artifact: the claim string overstated OpenRouter exposure, while the verified values object recorded 114/120, 114/120, and 120/120 across conditions. The resolution was not to edit `results/findings.json` during the writeup sprint. The resolution was to amend the decision log, paraphrase F8 from the per-arm values, and cite the issue as a review-process example.
 
 That is why "how this was reviewed" is load-bearing. Most empirical portfolio projects show charts and conclusions. This one also shows the process that constrained the conclusions: immutable inputs, annotated tags, remote verification, explicit decision logs, and corrections that preserve history. The review method is not decoration. It is part of the evidence that the claims were handled with discipline.
 
-The separation between local authoring and remote verification is especially important for this kind of project. The same person or agent drafting prose can easily become invested in the cleanest version of the story. A remote gate gives the work a forcing function: every surprising number has to survive a reviewer who can trace it back to the finding, and every awkward contradiction has to be documented rather than smoothed over. That is why the G2 skeleton existed before this prose draft.
+The separation between local authoring and remote verification is especially important for this kind of project. The same person or agent drafting prose can easily become invested in the cleanest version of the story. A remote gate gives the work a forcing function: every surprising number has to survive a reviewer who can trace it back to the finding, and every awkward contradiction has to be documented rather than smoothed over. That is why the writeup moved from structured claim map to prose only after the finding placeholders were reviewable.
 
-## Conclusion + future work (~400w)
+## Conclusion + future work
 
 The study's main conclusion is narrow but useful: authorization-respecting behavior in tool-using LLM agents is an empirical property of deployment context, model identity, and safeguard layering. It should not be inferred from model family, policy text, or a single aggregate score alone. F3 shows that destructive-action preconditions can split deployments sharply. F5 and F6 show an approximately fourfold closed-frontier baseline difference in indirect-injection robustness. F1, F2, F7, and F8 show that safeguards can improve one metric while leaving another metric costly.
 
@@ -152,6 +164,6 @@ The safest interpretation is system-level. A deployment should evaluate the mode
 
 Future work should broaden the single-action pilot into a multi-action corpus with longer workflows and more realistic dependencies between tools. It should add adaptive adversary modeling, because fixed prompt attacks are only a first step. It should test more model endpoints, hosted variants, and fine-tuned systems, including product-specific tool-call validators that sit outside the language model. It should also expand destructive-action precondition cases beyond F3 so that "verify before acting" can be measured as a family of behaviors rather than as one scenario.
 
-The immediate next step is more prosaic: G4 should audit links, finalize distribution intros, verify PDF export, and keep D-S4-7 visible so F8's wording stays truthful. The broader goal is unchanged. The writeup should be a portfolio artifact that is not merely persuasive, but reproducible and reviewable.
+The immediate release work is more prosaic: audit links, keep the distribution intros aligned with the canonical body, verify PDF export, and keep D-S4-7 visible so F8's wording stays truthful. The broader goal is unchanged. The writeup should be a portfolio artifact that is not merely persuasive, but reproducible and reviewable.
 
 Future evaluation should also separate policy compliance from user-intent preservation. The destructive-precondition case suggests that an authorized principal and an authorized tool are not enough; the agent must also preserve the timing and conditions embedded in the user's request. That line of work would connect authorization evaluation to safer task execution, where the question is not merely whether the model can do the action, but whether it should do it now, with the evidence currently available.
